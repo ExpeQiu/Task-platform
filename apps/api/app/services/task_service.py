@@ -206,7 +206,18 @@ class TaskService:
         if run.status == TaskStatus.RUNNING.value:
             await self.sm.transition(run, TaskStatus.WAITING_FEEDBACK.value, actor=actor, detail="Awaiting feedback processing")
 
+        from app.adapters.factory import get_adapter
+
+        adapter = None
+        if run.task and run.task.agent_adapter_id:
+            adapter_result = await self.db.execute(
+                select(AgentAdapter).where(AgentAdapter.id == run.task.agent_adapter_id)
+            )
+            adapter = adapter_result.scalar_one_or_none()
+
         status = payload.status.lower()
+        if adapter:
+            status = get_adapter(adapter).normalize_status(payload.status)
         if status == "success":
             await self.sm.transition(run, TaskStatus.REVIEWING.value, actor=actor, detail="Feedback received")
             await self.sm.transition(run, TaskStatus.SUCCESS.value, actor=actor, detail="Task completed")
@@ -227,7 +238,44 @@ class TaskService:
             detail=f"status={payload.status}",
             actor=actor,
         )
+
+        if run.workflow_run_id and status == "success":
+            await self._advance_workflow(run, payload.result_payload)
+        elif run.workflow_run_id and status == "failed":
+            await self._fail_workflow(run, payload.error_code or "AGENT_FAILED")
+
         return run
+
+    async def _advance_workflow(self, run: TaskRun, result_payload: dict) -> None:
+        from sqlalchemy.orm import selectinload
+        from app.models.entities import WorkflowRun
+        from app.services.workflow_engine import WorkflowEngine
+
+        wf_run_result = await self.db.execute(
+            select(WorkflowRun)
+            .options(selectinload(WorkflowRun.workflow))
+            .where(WorkflowRun.id == run.workflow_run_id)
+        )
+        wf_run = wf_run_result.scalar_one_or_none()
+        if not wf_run or not run.workflow_node_id:
+            return
+        engine = WorkflowEngine(self.db)
+        await engine.on_agent_node_complete(wf_run, run.workflow_node_id, result_payload or {})
+        logger.info("workflow advanced after feedback run=%s wf_run=%s node=%s", run.id, wf_run.id, run.workflow_node_id)
+
+    async def _fail_workflow(self, run: TaskRun, error: str) -> None:
+        from app.models.entities import WorkflowRun, WorkflowRunStatus
+
+        wf_run_result = await self.db.execute(select(WorkflowRun).where(WorkflowRun.id == run.workflow_run_id))
+        wf_run = wf_run_result.scalar_one_or_none()
+        if not wf_run:
+            return
+        wf_run.status = WorkflowRunStatus.FAILED.value
+        wf_run.error_message = error
+        from datetime import UTC, datetime
+
+        wf_run.finished_at = datetime.now(UTC)
+        logger.error("workflow failed from agent feedback wf_run=%s error=%s", wf_run.id, error)
 
     async def _handle_failure(self, run: TaskRun, error_code: str) -> None:
         from app.services.alerts import create_alert
@@ -275,6 +323,15 @@ class TaskService:
         adapter = adapter_result.scalar_one_or_none()
         if not adapter:
             raise HTTPException(status_code=400, detail="Adapter not found")
+        if not adapter.is_online:
+            await self.sm.transition(
+                run,
+                TaskStatus.FAILED.value,
+                actor="scheduler",
+                detail=f"Adapter '{adapter.name}' is offline",
+            )
+            logger.warning("dispatch blocked adapter offline run=%s adapter=%s", run.id, adapter.name)
+            return None  # type: ignore
 
         if run.status == TaskStatus.SCHEDULED.value:
             await self.sm.transition(run, TaskStatus.RUNNING.value, actor="scheduler", detail="Dispatch started")

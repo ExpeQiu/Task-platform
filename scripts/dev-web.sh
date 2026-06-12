@@ -26,8 +26,8 @@ export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
 export WATCHPACK_POLLING=true
 export CHOKIDAR_USEPOLLING=true
 
-nohup npm run dev > "$LOG_FILE" 2>&1 &
-echo $! > "$PID_FILE"
+WEB_PID="$("$ROOT/scripts/run-detached.sh" "$PID_FILE" "$LOG_FILE" npm run dev)"
+log "Web starting pid=$WEB_PID log=$LOG_FILE"
 
 for i in $(seq 1 30); do
   if curl -sf "http://127.0.0.1:${WEB_PORT}" >/dev/null 2>&1; then

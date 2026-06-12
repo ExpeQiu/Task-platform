@@ -19,6 +19,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getDashboard: () => request<DashboardMetrics>("/v1/metrics/dashboard"),
+  getAdapterMetrics: () => request<AdapterStat[]>("/v1/metrics/adapters"),
   listTasks: (params?: { status?: string; search?: string }) => {
     const q = new URLSearchParams();
     if (params?.status) q.set("status", params.status);
@@ -40,10 +41,52 @@ export const api = {
   listAudit: () => request<AuditEvent[]>("/v1/audit"),
   exportAudit: () => `${API_URL}/v1/audit/export`,
   listAdapters: () => request<Adapter[]>("/v1/adapters"),
-  createAdapter: (body: Partial<Adapter>) =>
+  getAdapter: (id: string) => request<Adapter>(`/v1/adapters/${id}`),
+  createAdapter: (body: AdapterCreate) =>
     request<Adapter>("/v1/adapters", { method: "POST", body: JSON.stringify(body) }),
-  updateAdapter: (id: string, body: Partial<Adapter>) =>
+  updateAdapter: (id: string, body: AdapterUpdate) =>
     request<Adapter>(`/v1/adapters/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteAdapter: (id: string) =>
+    request<void>(`/v1/adapters/${id}`, { method: "DELETE" }),
+  checkAdapterHealth: (id: string) => request<AdapterHealth>(`/v1/adapters/${id}/health`),
+
+  // MCP
+  listMcpServers: () => request<McpServer[]>("/v1/mcp"),
+  getMcpServer: (id: string) => request<McpServer>(`/v1/mcp/${id}`),
+  createMcpServer: (body: McpServerCreate) =>
+    request<McpServer>("/v1/mcp", { method: "POST", body: JSON.stringify(body) }),
+  updateMcpServer: (id: string, body: McpServerUpdate) =>
+    request<McpServer>(`/v1/mcp/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMcpServer: (id: string) => request<void>(`/v1/mcp/${id}`, { method: "DELETE" }),
+  probeMcpServer: (id: string) => request<McpHealth>(`/v1/mcp/${id}/probe`, { method: "POST" }),
+
+  // Workflows / Orchestrator
+  listWorkflows: (params?: { status?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    return request<WorkflowListResponse>(`/v1/workflows?${q}`);
+  },
+  getWorkflow: (id: string) => request<Workflow>(`/v1/workflows/${id}`),
+  createWorkflow: (body: WorkflowCreate) =>
+    request<Workflow>("/v1/workflows", { method: "POST", body: JSON.stringify(body) }),
+  updateWorkflow: (id: string, body: WorkflowUpdate) =>
+    request<Workflow>(`/v1/workflows/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  validateWorkflow: (id: string) =>
+    request<WorkflowValidateResult>(`/v1/workflows/${id}/validate`, { method: "POST" }),
+  publishWorkflow: (id: string) =>
+    request<Workflow>(`/v1/workflows/${id}/publish`, { method: "POST" }),
+  triggerWorkflow: (id: string, context?: Record<string, unknown>) =>
+    request<WorkflowRun>(`/v1/workflows/${id}/trigger`, {
+      method: "POST",
+      body: JSON.stringify({ context: context || {} }),
+    }),
+  listWorkflowRuns: (id: string) => request<WorkflowRun[]>(`/v1/workflows/${id}/runs`),
+  getWorkflowRun: (id: string) => request<WorkflowRun>(`/v1/workflows/runs/${id}`),
+  aiOrchestratorChat: (body: AiOrchestratorRequest) =>
+    request<AiOrchestratorResponse>("/v1/workflows/ai/chat", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 export interface DashboardMetrics {
@@ -53,6 +96,20 @@ export interface DashboardMetrics {
   queue_backlog: number;
   trend: { hour: string; success: number; failed: number }[];
   agent_distribution: { name: string; count: number }[];
+  adapter_stats: AdapterStat[];
+}
+
+export interface AdapterStat {
+  adapter_id: string;
+  name: string;
+  adapter_type: string;
+  protocol: string;
+  is_online: boolean;
+  total_assignments: number;
+  success_count: number;
+  failed_count: number;
+  success_rate: number;
+  avg_latency_ms: number | null;
 }
 
 export interface Task {
@@ -85,12 +142,29 @@ export interface TaskListResponse {
   total: number;
 }
 
+export interface LoopConfig {
+  max_iterations?: number;
+  max_duration_seconds?: number;
+  no_progress_threshold?: number | null;
+  budget_limit?: number | null;
+}
+
+export interface RetryConfig {
+  max_retries?: number;
+  backoff_base_seconds?: number;
+}
+
 export interface TaskCreate {
   name: string;
   objective: string;
   agent_adapter_id?: string;
+  priority?: number;
   sla_seconds?: number;
   tags?: string[];
+  schedule_cron?: string | null;
+  schedule_at?: string | null;
+  loop_config?: LoopConfig;
+  retry_config?: RetryConfig;
 }
 
 export interface RunLogs {
@@ -123,5 +197,174 @@ export interface Adapter {
   protocol: string;
   endpoint: string;
   description: string;
+  auth_config: Record<string, string>;
+  status_mapping: Record<string, string>;
   is_online: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdapterCreate {
+  name: string;
+  adapter_type?: string;
+  protocol?: "push" | "pull";
+  endpoint: string;
+  description?: string;
+  auth_config?: Record<string, string>;
+  status_mapping?: Record<string, string>;
+  is_online?: boolean;
+}
+
+export interface AdapterUpdate extends Partial<AdapterCreate> {}
+
+export interface AdapterHealth {
+  adapter_id: string;
+  status: "ok" | "error";
+  adapter: string;
+  protocol: string;
+  is_online: boolean;
+  assignment_count: number;
+  latency_ms?: number;
+  queue_depth?: number;
+  pull_url?: string;
+  endpoint_checked?: string;
+  error?: string;
+}
+
+// --- MCP ---
+
+export interface McpServer {
+  id: string;
+  name: string;
+  mcp_type: string;
+  transport: string;
+  endpoint: string;
+  description: string;
+  auth_config: Record<string, string>;
+  extra_config: Record<string, unknown>;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface McpServerCreate {
+  name: string;
+  mcp_type?: string;
+  transport?: "sse" | "http" | "stdio";
+  endpoint: string;
+  description?: string;
+  auth_config?: Record<string, string>;
+  extra_config?: Record<string, unknown>;
+  is_enabled?: boolean;
+}
+
+export interface McpServerUpdate extends Partial<McpServerCreate> {}
+
+export interface McpHealth {
+  mcp_id: string;
+  status: "Connected" | "Warning" | "Error" | "Disabled";
+  latency_ms?: number;
+  server_name?: string;
+  server_version?: string;
+  protocol_version?: string;
+  tool_count?: number;
+  resource_count?: number;
+  error?: string;
+}
+
+// --- Workflow / Orchestrator ---
+
+export type NodeType = "start" | "agent" | "end" | "condition" | "parallel" | "loop";
+
+export interface DagNode {
+  id: string;
+  type: NodeType;
+  label: string;
+  config: {
+    trigger?: string;
+    adapter_id?: string;
+    objective?: string;
+    expression?: string;
+    max_iterations?: number;
+    action?: string;
+  };
+  position: { x: number; y: number };
+}
+
+export interface DagEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface WorkflowDag {
+  nodes: DagNode[];
+  edges: DagEdge[];
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  description: string;
+  dag: WorkflowDag;
+  status: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowCreate {
+  name: string;
+  description?: string;
+  dag?: WorkflowDag;
+}
+
+export interface WorkflowUpdate {
+  name?: string;
+  description?: string;
+  dag?: WorkflowDag;
+}
+
+export interface WorkflowListResponse {
+  items: Workflow[];
+  total: number;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  status: string;
+  current_node_id: string | null;
+  context: Record<string, unknown>;
+  completed_nodes: string[];
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export interface WorkflowValidateResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface AiChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface AiOrchestratorRequest {
+  message: string;
+  history?: AiChatMessage[];
+  current_dag?: WorkflowDag;
+  adapter_names?: string[];
+}
+
+export interface AiOrchestratorResponse {
+  reply: string;
+  dag?: WorkflowDag;
+  workflow_name?: string;
+  suggestions?: string[];
 }

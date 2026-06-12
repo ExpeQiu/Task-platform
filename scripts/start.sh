@@ -11,18 +11,15 @@ if [ ! -f .env ]; then
   cp .env.example .env
 fi
 
-log "Starting infrastructure (postgres, redis)..."
-docker compose up -d postgres redis
+log "Starting local infrastructure (postgres, redis)..."
+"$ROOT/scripts/infra-local.sh"
 
-log "Waiting for postgres..."
-for i in $(seq 1 30); do
-  if docker compose exec -T postgres pg_isready -U taskplatform >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-log "Starting API, worker, beat, simulator..."
+log "Starting API, worker, beat, simulator (Docker -> host infra)..."
+export DATABASE_URL="postgresql+asyncpg://taskplatform:taskplatform@host.docker.internal:5432/taskplatform"
+export DATABASE_URL_SYNC="postgresql://taskplatform:taskplatform@host.docker.internal:5432/taskplatform"
+export REDIS_URL="redis://host.docker.internal:6379/0"
+export CELERY_BROKER_URL="redis://host.docker.internal:6379/1"
+export CELERY_RESULT_BACKEND="redis://host.docker.internal:6379/2"
 docker compose up -d api worker beat simulator
 
 log "Waiting for API health..."

@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 import os
 import random
@@ -18,6 +21,18 @@ SUCCESS_RATE = float(os.getenv("SIMULATOR_SUCCESS_RATE", "0.9"))
 TIMEOUT_RATE = float(os.getenv("SIMULATOR_TIMEOUT_RATE", "0.0"))
 PULL_ADAPTER_NAME = os.getenv("PULL_ADAPTER_NAME", "Hermes")
 PULL_INTERVAL = float(os.getenv("PULL_INTERVAL_SECONDS", "3"))
+PULL_API_KEY = os.getenv("PULL_API_KEY", "")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "dev-webhook-secret-change-me")
+WEBHOOK_HMAC_ENABLED = os.getenv("WEBHOOK_HMAC_ENABLED", "false").lower() == "true"
+SIGNATURE_HEADER = "X-Webhook-Signature"
+
+
+def sign_callback_body(body: bytes) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if WEBHOOK_HMAC_ENABLED:
+        sig = hmac.new(WEBHOOK_SECRET.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        headers[SIGNATURE_HEADER] = sig
+    return headers
 
 
 class TaskPayload(BaseModel):
@@ -51,22 +66,26 @@ async def send_callback(payload: TaskPayload):
         "logs": [{"level": "info", "message": f"Simulated {status} callback"}],
         "error_code": None if status != "failed" else "SIMULATED_FAILURE",
     }
+    body = json.dumps(feedback, ensure_ascii=False).encode("utf-8")
+    headers = sign_callback_body(body)
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(payload.callback_url, json=feedback)
+            resp = await client.post(payload.callback_url, content=body, headers=headers)
             resp.raise_for_status()
-        logger.info("callback sent run_id=%s status=%s", payload.run_id, status)
+        logger.info("callback sent run_id=%s status=%s hmac=%s", payload.run_id, status, WEBHOOK_HMAC_ENABLED)
     except Exception as exc:
         logger.error("callback failed run_id=%s error=%s", payload.run_id, exc)
 
 
 async def pull_loop():
+    headers = {"X-API-Key": PULL_API_KEY} if PULL_API_KEY else {}
     while True:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     f"{API_BASE_URL}/v1/agent/pull",
                     params={"adapter_name": PULL_ADAPTER_NAME},
+                    headers=headers,
                 )
                 if resp.status_code == 200 and resp.text and resp.text != "null":
                     data = resp.json()

@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     default_timeout_seconds: int = 300
     watchdog_interval_seconds: int = 60
     max_auto_retries: int = 3
+    ai_mock_mode: bool = True
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
 
 
 @lru_cache

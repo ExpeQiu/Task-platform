@@ -83,5 +83,40 @@ else
   fail "Dashboard metrics"
 fi
 
+if curl -sf "$API_URL/v1/metrics/dashboard" | grep -q "adapter_stats"; then
+  ok "Adapter stats in dashboard"
+else
+  fail "Adapter stats in dashboard"
+fi
+
+# Workflow orchestrator
+WF_RESP=$(curl -sf -X POST "$API_URL/v1/workflows" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Verify Workflow","description":"E2E workflow test"}' 2>/dev/null || echo "")
+WF_ID=$(echo "$WF_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+
+if [ -n "$WF_ID" ]; then
+  ok "Workflow created id=$WF_ID"
+  if curl -sf -X POST "$API_URL/v1/workflows/$WF_ID/validate" | grep -q '"valid"'; then
+    ok "Workflow validate endpoint"
+  else
+    fail "Workflow validate endpoint"
+  fi
+  # Patch agent nodes with adapter before publish
+  if [ -n "$ADAPTER_ID" ]; then
+    curl -sf -X PATCH "$API_URL/v1/workflows/$WF_ID" \
+      -H "Content-Type: application/json" \
+      -d "{\"dag\":{\"nodes\":[{\"id\":\"start\",\"type\":\"start\",\"label\":\"Start\",\"config\":{\"trigger\":\"webhook\"},\"position\":{\"x\":250,\"y\":40}},{\"id\":\"agent1\",\"type\":\"agent\",\"label\":\"Agent\",\"config\":{\"adapter_id\":\"$ADAPTER_ID\",\"objective\":\"verify\"},\"position\":{\"x\":250,\"y\":180}},{\"id\":\"end\",\"type\":\"end\",\"label\":\"End\",\"config\":{\"action\":\"notify\"},\"position\":{\"x\":250,\"y\":320}}],\"edges\":[{\"id\":\"e1\",\"source\":\"start\",\"target\":\"agent1\"},{\"id\":\"e2\",\"source\":\"agent1\",\"target\":\"end\"}]}}" >/dev/null
+    PUB=$(curl -sf -X POST "$API_URL/v1/workflows/$WF_ID/publish" 2>/dev/null || echo "")
+    if echo "$PUB" | grep -q '"Published"'; then
+      ok "Workflow published"
+    else
+      fail "Workflow publish failed"
+    fi
+  fi
+else
+  fail "Workflow creation failed"
+fi
+
 log "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import setup_logging
 from app.database import engine
 from app.models.entities import Base
-from app.routers import adapters, alerts, audit, metrics, runs, tasks
+from app.routers import adapters, alerts, audit, mcp, metrics, runs, tasks, workflows
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,9 @@ app.include_router(runs.router)
 app.include_router(alerts.router)
 app.include_router(audit.router)
 app.include_router(adapters.router)
+app.include_router(mcp.router)
 app.include_router(metrics.router)
+app.include_router(workflows.router)
 
 
 @app.get("/health")

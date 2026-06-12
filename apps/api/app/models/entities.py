@@ -41,6 +41,19 @@ class AdapterProtocol(str, enum.Enum):
     PULL = "pull"
 
 
+class McpType(str, enum.Enum):
+    RAG = "RAG"
+    SKILL = "Skill"
+    MEMORY = "Memory"
+    CUSTOM = "Custom"
+
+
+class McpTransport(str, enum.Enum):
+    SSE = "sse"
+    HTTP = "http"
+    STDIO = "stdio"
+
+
 class Task(Base):
     __tablename__ = "tasks"
 
@@ -66,11 +79,63 @@ class Task(Base):
     scheduled_jobs = relationship("ScheduledJob", back_populates="task", cascade="all, delete-orphan")
 
 
+class WorkflowStatus(str, enum.Enum):
+    DRAFT = "Draft"
+    PUBLISHED = "Published"
+    ARCHIVED = "Archived"
+
+
+class WorkflowRunStatus(str, enum.Enum):
+    PENDING = "Pending"
+    RUNNING = "Running"
+    WAITING_FEEDBACK = "WaitingFeedback"
+    SUCCESS = "Success"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
+
+
+class WorkflowDefinition(Base):
+    __tablename__ = "workflow_definitions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    dag: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(50), default=WorkflowStatus.DRAFT.value)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    runs = relationship("WorkflowRun", back_populates="workflow", cascade="all, delete-orphan")
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_definitions.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default=WorkflowRunStatus.PENDING.value)
+    current_node_id: Mapped[str | None] = mapped_column(String(100))
+    context: Mapped[dict] = mapped_column(JSONB, default=dict)
+    completed_nodes: Mapped[list] = mapped_column(JSONB, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workflow = relationship("WorkflowDefinition", back_populates="runs")
+    task_runs = relationship("TaskRun", back_populates="workflow_run")
+
+
 class TaskRun(Base):
     __tablename__ = "task_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False)
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("workflow_runs.id"))
+    workflow_node_id: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(50), default=TaskStatus.SCHEDULED.value)
     version: Mapped[int] = mapped_column(Integer, default=1)
     iteration_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -86,6 +151,7 @@ class TaskRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     task = relationship("Task", back_populates="runs")
+    workflow_run = relationship("WorkflowRun", back_populates="task_runs")
     assignments = relationship("Assignment", back_populates="run", cascade="all, delete-orphan")
     feedbacks = relationship("Feedback", back_populates="run", cascade="all, delete-orphan")
     alerts = relationship("Alert", back_populates="run", cascade="all, delete-orphan")
@@ -167,6 +233,24 @@ class AuditEvent(Base):
     detail: Mapped[str] = mapped_column(Text, default="")
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class McpServer(Base):
+    __tablename__ = "mcp_servers"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    mcp_type: Mapped[str] = mapped_column(String(50), default=McpType.CUSTOM.value)
+    transport: Mapped[str] = mapped_column(String(20), default=McpTransport.SSE.value)
+    endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    auth_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    extra_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    is_enabled: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ScheduledJob(Base):

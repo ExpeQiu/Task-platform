@@ -33,6 +33,10 @@ export default function DashboardPage() {
     );
   }
 
+  const trend = metrics.trend ?? [];
+  const agentDistribution = metrics.agent_distribution ?? [];
+  const adapterStats = metrics.adapter_stats ?? [];
+
   const cards = [
     { label: "总任务数", value: metrics.total_tasks, color: "text-gray-900" },
     { label: "活跃运行中", value: metrics.active_runs, pulse: true },
@@ -62,7 +66,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-lg shadow p-6 border border-gray-100">
             <h3 className="text-lg font-medium text-gray-900 mb-4">任务执行趋势</h3>
             <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={metrics.trend.slice(0, 12)}>
+              <LineChart data={trend.slice(0, 12)}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="hour" tick={{ fontSize: 11 }} />
                 <YAxis />
@@ -77,7 +81,7 @@ export default function DashboardPage() {
             <ResponsiveContainer width="100%" height={260}>
               <PieChart>
                 <Pie
-                  data={metrics.agent_distribution}
+                  data={agentDistribution}
                   dataKey="count"
                   nameKey="name"
                   cx="50%"
@@ -85,7 +89,7 @@ export default function DashboardPage() {
                   outerRadius={90}
                   label
                 >
-                  {metrics.agent_distribution.map((_, i) => (
+                  {agentDistribution.map((_, i) => (
                     <Cell key={i} fill={COLORS[i % COLORS.length]} />
                   ))}
                 </Pie>
@@ -94,6 +98,48 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
         </div>
+
+        {adapterStats.length > 0 && (
+          <div className="bg-white rounded-lg shadow p-6 border border-gray-100">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Adapter 运行指标</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b">
+                    <th className="pb-2 pr-4">名称</th>
+                    <th className="pb-2 pr-4">类型</th>
+                    <th className="pb-2 pr-4">协议</th>
+                    <th className="pb-2 pr-4">状态</th>
+                    <th className="pb-2 pr-4 text-right">分配数</th>
+                    <th className="pb-2 pr-4 text-right">成功率</th>
+                    <th className="pb-2 text-right">平均延迟</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adapterStats.map((a) => (
+                    <tr key={a.adapter_id} className="border-b border-gray-50">
+                      <td className="py-2 pr-4 font-medium">{a.name}</td>
+                      <td className="py-2 pr-4 text-gray-600">{a.adapter_type}</td>
+                      <td className="py-2 pr-4 text-gray-600">{a.protocol === "push" ? "Push" : "Pull"}</td>
+                      <td className="py-2 pr-4">
+                        <span className={`px-2 py-0.5 text-xs rounded-full ${a.is_online ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}>
+                          {a.is_online ? "Online" : "Offline"}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4 text-right">{a.total_assignments}</td>
+                      <td className="py-2 pr-4 text-right">
+                        {a.success_count + a.failed_count > 0 ? `${a.success_rate}%` : "—"}
+                      </td>
+                      <td className="py-2 text-right">
+                        {a.avg_latency_ms != null ? `${a.avg_latency_ms} ms` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </AppShell>
   );

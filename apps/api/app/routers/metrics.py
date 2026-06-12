@@ -1,13 +1,13 @@
 import logging
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.entities import AgentAdapter, Assignment, Task, TaskRun, TaskStatus
-from app.schemas.dto import DashboardMetrics
+from app.schemas.dto import AdapterStat, DashboardMetrics
+from app.services.adapter_metrics import get_adapter_stats
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/metrics", tags=["metrics"])
@@ -49,6 +49,9 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
     if not agent_distribution:
         agent_distribution = [{"name": "OpenClaw", "count": 0}, {"name": "Hermes", "count": 0}]
 
+    adapter_stats_raw = await get_adapter_stats(db)
+    adapter_stats = [AdapterStat(**item) for item in adapter_stats_raw]
+
     return DashboardMetrics(
         total_tasks=total_tasks,
         active_runs=active_runs,
@@ -56,4 +59,10 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
         queue_backlog=queue_backlog,
         trend=trend,
         agent_distribution=agent_distribution,
+        adapter_stats=adapter_stats,
     )
+
+
+@router.get("/adapters", response_model=list[AdapterStat])
+async def get_adapter_metrics(db: AsyncSession = Depends(get_db)):
+    return [AdapterStat(**item) for item in await get_adapter_stats(db)]

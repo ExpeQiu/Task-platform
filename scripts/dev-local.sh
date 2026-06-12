@@ -26,16 +26,8 @@ set +a
 
 mkdir -p "$LOG_DIR"
 
-log "Starting infrastructure (postgres, redis)..."
-docker compose up -d postgres redis
-
-log "Waiting for postgres..."
-for i in $(seq 1 30); do
-  if docker compose exec -T postgres pg_isready -U taskplatform >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
+log "Starting local infrastructure (postgres, redis)..."
+"$ROOT/scripts/infra-local.sh"
 
 start_bg() {
   local name="$1"
@@ -50,9 +42,9 @@ start_bg() {
       sleep 1
     fi
   fi
-  nohup "$@" > "$log_file" 2>&1 &
-  echo $! > "$pid_file"
-  log "Started $name pid=$(cat "$pid_file") log=$log_file"
+  local pid
+  pid="$("$ROOT/scripts/run-detached.sh" "$pid_file" "$log_file" "$@")"
+  log "Started $name pid=$pid log=$log_file"
 }
 
 if ! curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
