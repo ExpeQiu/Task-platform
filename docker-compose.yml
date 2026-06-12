@@ -1,0 +1,126 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taskplatform
+      POSTGRES_PASSWORD: taskplatform
+      POSTGRES_DB: taskplatform
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskplatform"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://taskplatform:taskplatform@postgres:5432/taskplatform
+      DATABASE_URL_SYNC: postgresql://taskplatform:taskplatform@postgres:5432/taskplatform
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      API_BASE_URL: http://api:8000
+      SIMULATOR_URL: http://simulator:8100
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./scripts:/app/scripts
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://taskplatform:taskplatform@postgres:5432/taskplatform
+      DATABASE_URL_SYNC: postgresql://taskplatform:taskplatform@postgres:5432/taskplatform
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      API_BASE_URL: http://api:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app/apps/api
+    command: celery -A app.celery_app worker --loglevel=info
+
+  beat:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://taskplatform:taskplatform@postgres:5432/taskplatform
+      DATABASE_URL_SYNC: postgresql://taskplatform:taskplatform@postgres:5432/taskplatform
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      API_BASE_URL: http://api:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app/apps/api
+    command: celery -A app.celery_app beat --loglevel=info
+
+  simulator:
+    build:
+      context: .
+      dockerfile: packages/agent-simulator/Dockerfile
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8100:8100"
+    depends_on:
+      - api
+    volumes:
+      - ./packages/agent-simulator:/app/packages/agent-simulator
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.dev
+    env_file: .env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    volumes:
+      - ./apps/web:/app/apps/web
+      - /app/apps/web/node_modules
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    command: npm run dev
+
+volumes:
+  postgres_data:

@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Platform - 任务编排中心 MVP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .pulse-dot {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen flex overflow-hidden text-gray-800" x-data="taskPlatform()" x-init="initCharts()">
+    <!-- 侧边栏导航 -->
+    <div class="w-64 bg-gray-900 text-white flex flex-col h-full shadow-lg flex-shrink-0">
+        <div class="p-5 flex items-center justify-center border-b border-gray-800">
+            <h1 class="text-xl font-bold tracking-wider">Task Platform</h1>
+        </div>
+        <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+            <a href="#" @click.prevent="currentTab = 'dashboard'" :class="currentTab === 'dashboard' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                数据看板 BI
+            </a>
+            <a href="#" @click.prevent="currentTab = 'tasks'" :class="currentTab === 'tasks' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+                任务中心
+            </a>
+            <a href="#" @click.prevent="currentTab = 'orchestrator'" :class="currentTab === 'orchestrator' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                流程编排
+            </a>
+            <div class="pt-4 pb-2"><p class="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">系统管理</p></div>
+            <a href="#" @click.prevent="currentTab = 'alerts'" :class="currentTab === 'alerts' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                告警中心
+                <span x-show="alerts.length > 0" class="ml-auto bg-red-500 text-white py-0.5 px-2 rounded-full text-xs" x-text="alerts.length"></span>
+            </a>
+            <a href="#" @click.prevent="currentTab = 'audit'" :class="currentTab === 'audit' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                治理与审计
+            </a>
+            <div class="pt-4 pb-2"><p class="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">生态接入</p></div>
+            <a href="#" @click.prevent="currentTab = 'agent'" :class="currentTab === 'agent' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                Agent 接入
+            </a>
+            <a href="#" @click.prevent="currentTab = 'mcp'" :class="currentTab === 'mcp' ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'" class="flex items-center px-4 py-3 rounded-md transition-colors">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                MCP 配置
+            </a>
+        </nav>
+        <div class="p-4 border-t border-gray-800">
+            <div class="flex items-center">
+                <div class="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-sm font-bold">A</div>
+                <div class="ml-3">
+                    <p class="text-sm font-medium">Admin User</p>
+                    <p class="text-xs text-gray-400">系统管理员</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="flex-1 flex flex-col h-full overflow-hidden w-full">
+        <!-- 顶栏 -->
+        <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm z-10 flex-shrink-0">
+            <h2 class="text-xl font-semibold text-gray-800" x-text="tabTitles[currentTab]"></h2>
+            <div class="flex items-center space-x-4">
+                <button class="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition relative">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                    <span x-show="alerts.length > 0" class="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                </button>
+            </div>
+        </header>
+
+        <!-- 内容滚动区 -->
+        <main class="flex-1 overflow-y-auto p-6 relative">
+            <!-- 动态通知 Toast -->
+            <div x-show="toast.show" x-transition.opacity.duration.300ms class="fixed top-20 right-6 z-50" x-cloak>
+                <div class="bg-gray-800 text-white px-4 py-3 rounded shadow-lg flex items-center">
+                    <svg class="w-5 h-5 text-green-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                    <span x-text="toast.message"></span>
+                </div>
+            </div>
+
+            <!-- 模块: 数据看板 BI -->
+            <div x-show="currentTab === 'dashboard'" x-cloak class="space-y-6">
+                <!-- 监控指标卡片 -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-gray-500 text-sm font-medium">总任务数</h3>
+                            <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                        </div>
+                        <div class="flex items-baseline">
+                            <span class="text-3xl font-bold text-gray-900">12,450</span>
+                            <span class="ml-2 text-sm text-green-500 flex items-center">
+                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"></path></svg>
+                                12.5%
+                            </span>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow p-6 border border-gray-100 relative overflow-hidden">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-gray-500 text-sm font-medium">活跃运行中</h3>
+                            <div class="w-3 h-3 bg-blue-500 rounded-full pulse-dot"></div>
+                        </div>
+                        <div class="flex items-baseline">
+                            <span class="text-3xl font-bold text-gray-900" x-text="activeTasks"></span>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-gray-500 text-sm font-medium">成功率</h3>
+                            <svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                        <div class="flex items-baseline">
+                            <span class="text-3xl font-bold text-gray-900" x-text="successRate + '%'"></span>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-gray-500 text-sm font-medium">队列积压</h3>
+                            <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        </div>
+                        <div class="flex items-baseline">
+                            <span class="text-3xl font-bold text-red-600" x-text="queueBacklog"></span>
+                            <span class="ml-2 text-sm text-gray-500">条待调度</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 图表区 -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">任务执行趋势</h3>
+                        <div class="relative h-64 w-full">
+                            <canvas id="trendChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Agent 任务负载分布</h3>
+                        <div class="relative h-64 w-full">
+                            <canvas id="agentChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模块: 任务中心 -->
+            <div x-show="currentTab === 'tasks'" x-cloak class="space-y-6">
+                <div class="flex justify-between items-center">
+                    <div class="flex space-x-2">
+                        <input type="text" placeholder="搜索任务..." class="border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500 py-2 px-4 border">
+                        <select class="border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500 py-2 px-4 border">
+                            <option>全部状态</option>
+                            <option>运行中</option>
+                            <option>成功</option>
+                            <option>失败</option>
+                        </select>
+                    </div>
+                    <button @click="showToast('新建任务面板已打开')" class="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition">新建任务</button>
+                </div>
+                <div class="bg-white shadow rounded-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">任务 ID / 名称</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分配 Agent</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">进度</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <template x-for="task in tasks" :key="task.id">
+                                <tr class="hover:bg-gray-50 transition">
+                                    <td class="px-6 py-4">
+                                        <div class="text-sm font-medium text-gray-900" x-text="task.name"></div>
+                                        <div class="text-sm text-gray-500 font-mono" x-text="task.id"></div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full"
+                                              :class="{
+                                                'bg-blue-100 text-blue-800': task.status === 'Running',
+                                                'bg-green-100 text-green-800': task.status === 'Success',
+                                                'bg-red-100 text-red-800': task.status === 'Failed'
+                                              }" x-text="task.status"></span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="task.agent"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                            <div class="h-2.5 rounded-full" 
+                                                 :class="task.status === 'Failed' ? 'bg-red-500' : 'bg-indigo-600'"
+                                                 :style="'width: ' + task.progress + '%'"></div>
+                                        </div>
+                                        <span class="text-xs text-gray-500 mt-1" x-text="task.progress + '%'"></span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                        <button class="text-indigo-600 hover:text-indigo-900">详情</button>
+                                        <button class="text-gray-600 hover:text-gray-900">日志</button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 模块: 流程编排 -->
+            <div x-show="currentTab === 'orchestrator'" x-cloak class="h-full flex flex-col bg-white border border-gray-200 rounded-lg shadow-sm" style="min-height: 400px;">
+                <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                    <h3 class="text-lg font-medium text-gray-900">流程设计器 (DAG)</h3>
+                    <div class="space-x-2">
+                        <button class="bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-md text-sm hover:bg-gray-50">保存草稿</button>
+                        <button class="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700">发布流程</button>
+                    </div>
+                </div>
+                <div class="flex-1 bg-gray-100 p-8 flex items-center justify-center relative overflow-hidden">
+                    <div class="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCI+CjxyZWN0IHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgZmlsbD0ibm9uZSIvPgo8Y2lyY2xlIGN4PSIxIiBjeT0iMSIgcj0iMSIgZmlsbD0iI2QxZDVkYiIvPgo8L3N2Zz4=')] opacity-50"></div>
+                    <div class="relative flex flex-col items-center space-y-6 z-10">
+                        <div class="bg-white border-2 border-indigo-500 rounded-lg p-4 shadow-md w-48 text-center cursor-pointer hover:shadow-lg">
+                            <div class="text-xs text-gray-500 mb-1">Start Node</div>
+                            <div class="font-bold text-gray-800">接收 Webhook</div>
+                        </div>
+                        <div class="w-0.5 h-6 bg-gray-400"></div>
+                        <div class="flex space-x-8">
+                            <div class="flex flex-col items-center space-y-6">
+                                <div class="w-16 h-0.5 bg-gray-400 absolute mt-[-1.5rem] ml-24"></div>
+                                <div class="bg-white border border-gray-300 rounded-lg p-4 shadow-md w-48 text-center cursor-pointer hover:border-indigo-400">
+                                    <div class="text-xs text-blue-500 mb-1">Agent Task</div>
+                                    <div class="font-bold text-gray-800">OpenClaw 抓取</div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-center space-y-6">
+                                <div class="bg-white border border-gray-300 rounded-lg p-4 shadow-md w-48 text-center cursor-pointer hover:border-indigo-400">
+                                    <div class="text-xs text-purple-500 mb-1">Agent Task</div>
+                                    <div class="font-bold text-gray-800">Hermes 总结</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="w-0.5 h-6 bg-gray-400"></div>
+                        <div class="bg-white border border-gray-300 rounded-lg p-4 shadow-md w-48 text-center cursor-pointer hover:border-indigo-400">
+                            <div class="text-xs text-green-500 mb-1">End Node</div>
+                            <div class="font-bold text-gray-800">输出报告并告警</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模块: 告警中心 -->
+            <div x-show="currentTab === 'alerts'" x-cloak class="bg-white shadow rounded-lg border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">活跃告警</h3>
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                        <span x-text="alerts.length"></span> 条未处理
+                    </span>
+                </div>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-white">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">告警级别</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">告警类型</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">触发内容</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">触发时间</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <template x-for="alert in alerts" :key="alert.id">
+                            <tr class="hover:bg-gray-50 transition">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full"
+                                          :class="alert.severity === 'Critical' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'"
+                                          x-text="alert.severity"></span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="alert.type"></td>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="alert.content"></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="alert.time"></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    <button @click="resolveAlert(alert.id)" class="text-indigo-600 hover:text-indigo-900">确认 / 解决</button>
+                                </td>
+                            </tr>
+                        </template>
+                        <tr x-show="alerts.length === 0">
+                            <td colspan="5" class="px-6 py-8 text-center text-sm text-gray-500">当前没有未处理的告警。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 模块: 治理与审计 -->
+            <div x-show="currentTab === 'audit'" x-cloak class="bg-white shadow rounded-lg border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">系统操作审计记录</h3>
+                    <div class="flex space-x-2">
+                        <input type="text" placeholder="搜索操作对象..." class="border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500 py-1.5 px-3 border">
+                        <button class="bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-md text-sm hover:bg-gray-50 transition">导出</button>
+                    </div>
+                </div>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-white">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">时间</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作人 / 来源</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">动作</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作对象</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">详情</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <template x-for="log in auditLogs" :key="log.id">
+                            <tr class="hover:bg-gray-50 transition">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="log.time"></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="log.user"></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                    <span class="px-2 py-1 bg-gray-100 rounded text-gray-600 font-mono text-xs" x-text="log.action"></span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-indigo-600 font-mono" x-text="log.target"></td>
+                                <td class="px-6 py-4 text-sm text-gray-500" x-text="log.detail"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 模块: Agent 接入 -->
+            <div x-show="currentTab === 'agent'" x-cloak class="space-y-6">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-lg font-medium text-gray-900">适配器管理 (Adapters)</h3>
+                    <button @click="showToast('正在打开新增适配器面板')" class="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition">新增适配器</button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <template x-for="agent in agents" :key="agent.id">
+                        <div class="bg-white shadow rounded-lg border border-gray-200 p-6 flex flex-col hover:shadow-md transition">
+                            <div class="flex justify-between items-start mb-4">
+                                <div class="flex items-center">
+                                    <div class="h-10 w-10 rounded bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-lg" x-text="agent.name.charAt(0)"></div>
+                                    <div class="ml-3">
+                                        <h4 class="text-sm font-bold text-gray-900" x-text="agent.name"></h4>
+                                        <p class="text-xs text-gray-500" x-text="agent.type"></p>
+                                    </div>
+                                </div>
+                                <span class="px-2 py-1 text-xs rounded-full font-medium" 
+                                      :class="agent.status === 'Online' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'"
+                                      x-text="agent.status"></span>
+                            </div>
+                            <p class="text-sm text-gray-600 mb-4 flex-1" x-text="agent.desc"></p>
+                            <div class="border-t border-gray-100 pt-4 flex justify-between items-center text-sm">
+                                <span class="text-gray-500">协议: <span class="font-medium text-gray-700" x-text="agent.protocol"></span></span>
+                                <div class="space-x-2">
+                                    <button class="text-indigo-600 hover:text-indigo-900 font-medium">配置</button>
+                                    <button class="text-red-600 hover:text-red-900 font-medium">停用</button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="agents.length === 0" class="col-span-full py-8 text-center text-sm text-gray-500 bg-white shadow rounded-lg border border-gray-200">
+                        当前没有配置的 Agent 适配器。
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模块: MCP 配置 -->
+            <div x-show="currentTab === 'mcp'" x-cloak class="space-y-6">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-lg font-medium text-gray-900">Model Context Protocol 配置</h3>
+                    <button @click="showToast('正在打开新增 MCP 连接面板')" class="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition">新增 MCP</button>
+                </div>
+                <div class="bg-white shadow rounded-lg border border-gray-200 overflow-hidden">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">组件名称</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型 / 描述</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endpoint URL</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <template x-for="mcp in mcps" :key="mcp.id">
+                                <tr class="hover:bg-gray-50 transition">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <div class="flex-shrink-0 h-8 w-8 text-gray-400">
+                                                <svg class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                            </div>
+                                            <div class="ml-4">
+                                                <div class="text-sm font-medium text-gray-900" x-text="mcp.name"></div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <div class="text-sm text-gray-900" x-text="mcp.type"></div>
+                                        <div class="text-sm text-gray-500" x-text="mcp.desc"></div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" x-text="mcp.endpoint"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full"
+                                              :class="{
+                                                'bg-green-100 text-green-800': mcp.status === 'Connected',
+                                                'bg-yellow-100 text-yellow-800': mcp.status === 'Warning',
+                                                'bg-red-100 text-red-800': mcp.status === 'Error'
+                                              }"
+                                              x-text="mcp.status"></span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                                        <button @click="showToast('测试连接成功')" class="text-green-600 hover:text-green-900">测试</button>
+                                        <button class="text-indigo-600 hover:text-indigo-900">编辑</button>
+                                    </td>
+                                </tr>
+                            </template>
+                            <tr x-show="mcps.length === 0">
+                                <td colspan="5" class="px-6 py-8 text-center text-sm text-gray-500">当前没有配置的 MCP 扩展组件。</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Alpine.js 状态和逻辑 -->
+    <script>
+        function taskPlatform() {
+            return {
+                currentTab: 'dashboard',
+                tabTitles: {
+                    'dashboard': '数据看板 BI & 运行监控',
+                    'tasks': '任务中心',
+                    'orchestrator': '流程编排',
+                    'alerts': '告警中心',
+                    'audit': '治理与审计',
+                    'agent': 'Agent 接入',
+                    'mcp': 'MCP 配置'
+                },
+                toast: { show: false, message: '' },
+                showToast(msg) {
+                    this.toast.message = msg;
+                    this.toast.show = true;
+                    setTimeout(() => { this.toast.show = false; }, 3000);
+                },
+                alerts: [
+                    { id: 1, severity: 'Critical', type: 'Agent Timeout', content: 'Hermes Agent 回调超时 (超过 300s)', time: '2026-06-12 10:15:00' },
+                    { id: 2, severity: 'Warning', type: 'Queue Backlog', content: '高优先级队列积压超过 50 个', time: '2026-06-12 10:20:33' }
+                ],
+                resolveAlert(id) {
+                    this.alerts = this.alerts.filter(a => a.id !== id);
+                    this.showToast('告警已确认/解决');
+                },
+                auditLogs: [
+                    { id: 1, time: '2026-06-12 09:30:12', user: 'Admin User', action: 'CREATE_TASK', target: 'Task-1024', detail: '创建了竞品数据监控任务' },
+                    { id: 2, time: '2026-06-12 09:45:00', user: 'System', action: 'AUTO_RETRY', target: 'Task-1020', detail: '因网络超时触发自动重试 (1/3)' },
+                    { id: 3, time: '2026-06-12 10:05:22', user: 'Admin User', action: 'UPDATE_AGENT', target: 'Hermes Adapter', detail: '更新了鉴权 Token' }
+                ],
+                agents: [
+                    { id: 1, name: 'OpenClaw', type: '通用智能体', status: 'Online', desc: '支持复杂网页交互和数据抓取', protocol: 'Webhook (Push)' },
+                    { id: 2, name: 'Hermes', type: '私有化大模型', status: 'Online', desc: '用于敏感数据处理与本地逻辑推理', protocol: 'Polling (Pull)' },
+                    { id: 3, name: 'Coze API', type: '第三方平台', status: 'Offline', desc: '对接 Coze 上的特定业务 Agent', protocol: 'REST API' }
+                ],
+                mcps: [
+                    { id: 1, name: '公司内网 Wiki', type: 'RAG 知识库', desc: '支持从内部 Wiki 检索文档', endpoint: 'https://api.internal/wiki/mcp', status: 'Connected' },
+                    { id: 2, name: 'SQL Query Tool', type: 'Skill', desc: '允许大模型直接查询数据仓库', endpoint: 'https://api.internal/sql/mcp', status: 'Connected' },
+                    { id: 3, name: 'Mem0 记忆服务', type: 'Memory', desc: '跨任务维持用户偏好和状态', endpoint: 'https://api.internal/mem0', status: 'Warning' }
+                ],
+                tasks: [
+                    { id: 'TSK-1001', name: '竞品数据监控', status: 'Running', agent: 'OpenClaw', progress: 45 },
+                    { id: 'TSK-1002', name: '财报分析生成', status: 'Success', agent: 'Hermes', progress: 100 },
+                    { id: 'TSK-1003', name: '用户反馈分类', status: 'Failed', agent: 'Coze API', progress: 10 }
+                ],
+                queueBacklog: 12,
+                activeTasks: 35,
+                successRate: 98.5,
+                initCharts() {
+                    const ctxTrend = document.getElementById('trendChart');
+                    if (ctxTrend) {
+                        new Chart(ctxTrend, {
+                            type: 'line',
+                            data: {
+                                labels: ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00'],
+                                datasets: [{
+                                    label: '成功任务',
+                                    data: [120, 150, 180, 140, 210, 190],
+                                    borderColor: 'rgb(34, 197, 94)',
+                                    tension: 0.3
+                                }, {
+                                    label: '失败任务',
+                                    data: [5, 8, 3, 12, 4, 6],
+                                    borderColor: 'rgb(239, 68, 68)',
+                                    tension: 0.3
+                                }]
+                            },
+                            options: { responsive: true, maintainAspectRatio: false }
+                        });
+                    }
+                    
+                    const ctxAgent = document.getElementById('agentChart');
+                    if (ctxAgent) {
+                        new Chart(ctxAgent, {
+                            type: 'doughnut',
+                            data: {
+                                labels: ['OpenClaw', 'Hermes', 'Coze API'],
+                                datasets: [{
+                                    data: [45, 35, 20],
+                                    backgroundColor: ['rgb(99, 102, 241)', 'rgb(168, 85, 247)', 'rgb(236, 72, 153)']
+                                }]
+                            },
+                            options: { responsive: true, maintainAspectRatio: false }
+                        });
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>
