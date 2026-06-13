@@ -1,7 +1,10 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { api, Adapter, Task, TaskCreate } from "@/lib/api";
+import { CriteriaBuilder } from "@/components/tasks/criteria-builder";
+import { api, Adapter, CriteriaConfig, Skill, TaskCreate, TaskListItem } from "@/lib/api";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const statusClass: Record<string, string> = {
@@ -10,7 +13,21 @@ const statusClass: Record<string, string> = {
   Failed: "bg-red-100 text-red-800",
   Draft: "bg-gray-100 text-gray-800",
   Ready: "bg-yellow-100 text-yellow-800",
+  Scheduled: "bg-indigo-100 text-indigo-800",
+  WaitingFeedback: "bg-purple-100 text-purple-800",
+  Reviewing: "bg-cyan-100 text-cyan-800",
+  Iterating: "bg-orange-100 text-orange-800",
+  Cancelled: "bg-gray-100 text-gray-600",
+  Terminated: "bg-red-50 text-red-700",
 };
+
+const VERIFICATION_LABELS: Record<string, string> = {
+  rule_based: "规则",
+  llm_agent: "LLM",
+  hybrid: "混合",
+};
+
+const DEFAULT_CRITERIA: CriteriaConfig = { rules: [], match: "all" };
 
 const DEFAULT_FORM = {
   name: "",
@@ -28,6 +45,9 @@ const DEFAULT_FORM = {
   loop_budget_limit: "" as number | "",
   retry_max_retries: 3,
   retry_backoff_base_seconds: 30,
+  criteria: DEFAULT_CRITERIA,
+  verification_mode: "rule_based" as "rule_based" | "llm_agent" | "hybrid",
+  skill_id: "",
 };
 
 type TaskForm = typeof DEFAULT_FORM;
@@ -58,7 +78,13 @@ function buildPayload(form: TaskForm): TaskCreate {
     },
   };
 
+  if (form.criteria?.rules?.length) {
+    payload.success_criteria = form.criteria;
+  }
+
   if (form.agent_adapter_id) payload.agent_adapter_id = form.agent_adapter_id;
+  if (form.verification_mode) payload.verification_mode = form.verification_mode;
+  if (form.skill_id) payload.skill_id = form.skill_id;
 
   if (form.schedule_mode === "once" && form.schedule_at) {
     payload.schedule_at = new Date(form.schedule_at).toISOString();
@@ -81,27 +107,28 @@ function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: stri
 const inputClass = "w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-indigo-500 focus:border-indigo-500";
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const router = useRouter();
+  const [tasks, setTasks] = useState<TaskListItem[]>([]);
   const [adapters, setAdapters] = useState<Adapter[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [form, setForm] = useState<TaskForm>({ ...DEFAULT_FORM });
-  const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [form, setForm] = useState<TaskForm>({ ...DEFAULT_FORM, criteria: { ...DEFAULT_CRITERIA } });
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const load = () => {
     api.listTasks({ search: search || undefined, status: statusFilter || undefined }).then((r) => setTasks(r.items));
     api.listAdapters().then(setAdapters);
+    api.listSkills().then((r) => setSkills(r.items.filter((s) => s.is_active))).catch(() => {});
   };
 
   useEffect(() => { load(); }, [search, statusFilter]);
 
   const resetForm = () => {
-    setForm({ ...DEFAULT_FORM });
+    setForm({ ...DEFAULT_FORM, criteria: { ...DEFAULT_CRITERIA } });
     setShowAdvanced(false);
   };
 
@@ -138,30 +165,25 @@ export default function TasksPage() {
     }
   };
 
-  const viewLogs = async (taskId: string) => {
-    const detail = await api.getTask(taskId);
-    if (detail.latest_run) {
-      setSelectedRun(detail.latest_run.id);
-      const logData = await api.getRunLogs(detail.latest_run.id);
-      setLogs(logData.logs.map((l) => `[${l.source}] ${l.message}`));
+  const openRun = (task: TaskListItem) => {
+    if (task.latest_run) {
+      router.push(`/runs/${task.latest_run.id}`);
     } else {
-      setLogs(["暂无执行记录"]);
+      setMessage("暂无执行记录");
     }
   };
 
-  const terminate = async (taskId: string) => {
-    const detail = await api.getTask(taskId);
-    if (detail.latest_run) {
-      await api.terminateRun(detail.latest_run.id);
+  const terminate = async (task: TaskListItem) => {
+    if (task.latest_run) {
+      await api.terminateRun(task.latest_run.id);
       setMessage("任务已终止");
       load();
     }
   };
 
-  const retry = async (taskId: string) => {
-    const detail = await api.getTask(taskId);
-    if (detail.latest_run) {
-      await api.retryRun(detail.latest_run.id);
+  const retry = async (task: TaskListItem) => {
+    if (task.latest_run) {
+      await api.retryRun(task.latest_run.id);
       setMessage("已触发重试");
       load();
     }
@@ -194,9 +216,14 @@ export default function TasksPage() {
             <option value="">全部状态</option>
             <option value="Draft">Draft</option>
             <option value="Ready">Ready</option>
+            <option value="Scheduled">Scheduled</option>
             <option value="Running">Running</option>
+            <option value="WaitingFeedback">WaitingFeedback</option>
+            <option value="Reviewing">Reviewing</option>
+            <option value="Iterating">Iterating</option>
             <option value="Success">Success</option>
             <option value="Failed">Failed</option>
+            <option value="Terminated">Terminated</option>
           </select>
         </div>
         <button
@@ -215,7 +242,6 @@ export default function TasksPage() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* 基础信息 */}
             <div className="space-y-4">
               <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide border-b pb-2">基础信息</h4>
               <div>
@@ -238,6 +264,40 @@ export default function TasksPage() {
                 />
               </div>
               <div>
+                <FieldLabel hint="rule_based | llm_agent | hybrid">验证模式</FieldLabel>
+                <select
+                  value={form.verification_mode}
+                  onChange={(e) => setForm({ ...form, verification_mode: e.target.value as TaskForm["verification_mode"] })}
+                  className={inputClass}
+                >
+                  <option value="rule_based">规则验证（默认）</option>
+                  <option value="llm_agent">独立 LLM Verifier</option>
+                  <option value="hybrid">规则 + LLM 混合</option>
+                </select>
+              </div>
+              <div>
+                <FieldLabel hint="可选">关联 Skill</FieldLabel>
+                <select
+                  value={form.skill_id}
+                  onChange={(e) => setForm({ ...form, skill_id: e.target.value })}
+                  className={inputClass}
+                >
+                  <option value="">不使用 Skill</option>
+                  {skills.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                {skills.length === 0 && (
+                  <p className="mt-1 text-xs text-gray-400">
+                    暂无 Skill，可在 <Link href="/skills" className="text-indigo-600 hover:underline">Skill 资产</Link> 中创建
+                  </p>
+                )}
+              </div>
+              <CriteriaBuilder
+                value={form.criteria}
+                onChange={(criteria) => setForm({ ...form, criteria })}
+              />
+              <div>
                 <FieldLabel hint="逗号分隔">标签</FieldLabel>
                 <input
                   placeholder="monitoring, daily, report"
@@ -248,7 +308,6 @@ export default function TasksPage() {
               </div>
             </div>
 
-            {/* 执行配置 */}
             <div className="space-y-4">
               <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide border-b pb-2">执行配置</h4>
               <div>
@@ -296,7 +355,6 @@ export default function TasksPage() {
                 </div>
               </div>
 
-              {/* 调度方式 */}
               <div>
                 <FieldLabel>调度方式</FieldLabel>
                 <div className="flex flex-wrap gap-2 mb-2">
@@ -339,7 +397,6 @@ export default function TasksPage() {
             </div>
           </div>
 
-          {/* 高级配置 */}
           <div className="mt-5 border-t pt-4">
             <button
               type="button"
@@ -434,6 +491,8 @@ export default function TasksPage() {
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">任务 ID / 名称</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">验证</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">轮次</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">优先级</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">标签</th>
@@ -443,6 +502,8 @@ export default function TasksPage() {
           <tbody className="divide-y divide-gray-200">
             {tasks.map((task) => {
               const adapter = adapters.find((a) => a.id === task.agent_adapter_id);
+              const runStatus = task.latest_run?.status;
+              const displayStatus = runStatus && task.status === "Ready" ? runStatus : task.status;
               return (
                 <tr key={task.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
@@ -450,9 +511,25 @@ export default function TasksPage() {
                     <div className="text-sm text-gray-500 font-mono">{task.id.slice(0, 8)}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${statusClass[task.status] || "bg-gray-100"}`}>
-                      {task.status}
+                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${statusClass[displayStatus] || "bg-gray-100"}`}>
+                      {displayStatus}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {VERIFICATION_LABELS[task.verification_mode || "rule_based"] || task.verification_mode || "规则"}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {task.latest_run ? (
+                      <button
+                        type="button"
+                        onClick={() => openRun(task)}
+                        className="text-indigo-600 hover:underline"
+                      >
+                        第 {task.latest_run.iteration_count} 轮
+                      </button>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600">
                     <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
@@ -470,23 +547,23 @@ export default function TasksPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right text-sm space-x-2">
-                    <button onClick={() => viewLogs(task.id)} className="text-indigo-600 hover:text-indigo-900">日志</button>
-                    <button onClick={() => retry(task.id)} className="text-gray-600">重试</button>
-                    <button onClick={() => terminate(task.id)} className="text-red-600">终止</button>
+                    {task.latest_run ? (
+                      <Link href={`/runs/${task.latest_run.id}`} className="text-indigo-600 hover:text-indigo-900">详情</Link>
+                    ) : (
+                      <span className="text-gray-400">详情</span>
+                    )}
+                    <button onClick={() => retry(task)} className="text-gray-600">重试</button>
+                    <button onClick={() => terminate(task)} className="text-red-600">终止</button>
                   </td>
                 </tr>
               );
             })}
+            {tasks.length === 0 && (
+              <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-500">暂无任务</td></tr>
+            )}
           </tbody>
         </table>
       </div>
-
-      {selectedRun && (
-        <div className="mt-6 bg-white p-4 rounded-lg border">
-          <h4 className="font-medium mb-2">执行日志 (run: {selectedRun.slice(0, 8)})</h4>
-          <pre className="text-xs bg-gray-50 p-3 rounded overflow-auto max-h-48">{logs.join("\n")}</pre>
-        </div>
-      )}
     </AppShell>
   );
 }

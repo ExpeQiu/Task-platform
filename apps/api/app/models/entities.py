@@ -54,6 +54,38 @@ class McpTransport(str, enum.Enum):
     STDIO = "stdio"
 
 
+class MemoryScope(str, enum.Enum):
+    GLOBAL = "global"
+    TASK_TYPE = "task_type"
+    TASK = "task"
+
+
+class ApprovalStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class Skill(Base):
+    __tablename__ = "skills"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    applicable_task_types: Mapped[list] = mapped_column(JSONB, default=list)
+    input_contract: Mapped[dict] = mapped_column(JSONB, default=dict)
+    output_contract: Mapped[dict] = mapped_column(JSONB, default=dict)
+    tags: Mapped[list] = mapped_column(JSONB, default=list)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    tasks = relationship("Task", back_populates="skill")
+
+
 class Task(Base):
     __tablename__ = "tasks"
 
@@ -68,6 +100,10 @@ class Task(Base):
     schedule_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     loop_config: Mapped[dict] = mapped_column(JSONB, default=dict)
     retry_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    success_criteria: Mapped[dict] = mapped_column(JSONB, default=dict)
+    failure_criteria: Mapped[dict] = mapped_column(JSONB, default=dict)
+    verification_mode: Mapped[str] = mapped_column(String(50), default="rule_based")
+    skill_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("skills.id"))
     status: Mapped[str] = mapped_column(String(50), default=TaskStatus.DRAFT.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -75,6 +111,7 @@ class Task(Base):
     )
 
     adapter = relationship("AgentAdapter", back_populates="tasks")
+    skill = relationship("Skill", back_populates="tasks")
     runs = relationship("TaskRun", back_populates="task", cascade="all, delete-orphan")
     scheduled_jobs = relationship("ScheduledJob", back_populates="task", cascade="all, delete-orphan")
 
@@ -89,6 +126,7 @@ class WorkflowRunStatus(str, enum.Enum):
     PENDING = "Pending"
     RUNNING = "Running"
     WAITING_FEEDBACK = "WaitingFeedback"
+    PENDING_APPROVAL = "PendingApproval"
     SUCCESS = "Success"
     FAILED = "Failed"
     CANCELLED = "Cancelled"
@@ -127,6 +165,7 @@ class WorkflowRun(Base):
 
     workflow = relationship("WorkflowDefinition", back_populates="runs")
     task_runs = relationship("TaskRun", back_populates="workflow_run")
+    approvals = relationship("WorkflowApproval", back_populates="workflow_run", cascade="all, delete-orphan")
 
 
 class TaskRun(Base):
@@ -154,6 +193,9 @@ class TaskRun(Base):
     workflow_run = relationship("WorkflowRun", back_populates="task_runs")
     assignments = relationship("Assignment", back_populates="run", cascade="all, delete-orphan")
     feedbacks = relationship("Feedback", back_populates="run", cascade="all, delete-orphan")
+    verification_results = relationship(
+        "VerificationResult", back_populates="run", cascade="all, delete-orphan"
+    )
     alerts = relationship("Alert", back_populates="run", cascade="all, delete-orphan")
 
 
@@ -185,6 +227,21 @@ class Feedback(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     run = relationship("TaskRun", back_populates="feedbacks")
+
+
+class VerificationResult(Base):
+    __tablename__ = "verification_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("task_runs.id"), nullable=False)
+    iteration: Mapped[int] = mapped_column(Integer, default=0)
+    verdict: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    signals: Mapped[dict] = mapped_column(JSONB, default=dict)
+    verified_by: Mapped[str] = mapped_column(String(100), default="rule_based")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    run = relationship("TaskRun", back_populates="verification_results")
 
 
 class AgentAdapter(Base):
@@ -267,3 +324,37 @@ class ScheduledJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     task = relationship("Task", back_populates="scheduled_jobs")
+
+
+class MemoryEntry(Base):
+    __tablename__ = "memory_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String(50), default=MemoryScope.GLOBAL.value)
+    scope_ref: Mapped[str | None] = mapped_column(String(255))
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkflowApproval(Base):
+    __tablename__ = "workflow_approvals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_runs.id"), nullable=False
+    )
+    node_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(50), default=ApprovalStatus.PENDING.value)
+    decided_by: Mapped[str | None] = mapped_column(String(100))
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    workflow_run = relationship("WorkflowRun", back_populates="approvals")

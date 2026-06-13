@@ -139,6 +139,29 @@ export function NodePanel({ node, nodes, edges, adapters, onChange, onDelete, on
         </div>
       )}
 
+      {node.type === "approval" && (
+        <>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">审批标题</label>
+            <input
+              className={inputClass}
+              value={node.config.title || ""}
+              onChange={(e) => patchConfig("title", e.target.value)}
+              placeholder="例如：发布前人工确认"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">审批说明</label>
+            <textarea
+              className={inputClass + " h-20 resize-none"}
+              value={node.config.message || ""}
+              onChange={(e) => patchConfig("message", e.target.value)}
+              placeholder="描述审批人需要确认的内容"
+            />
+          </div>
+        </>
+      )}
+
       {node.type === "end" && (
         <div>
           <label className="block text-xs text-gray-500 mb-1">结束动作</label>

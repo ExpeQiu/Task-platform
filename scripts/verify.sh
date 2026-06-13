@@ -38,7 +38,7 @@ fi
 # E2E: create + submit + wait for success
 ADAPTER_ID=$(echo "$ADAPTERS" | python3 -c "import sys,json; data=json.load(sys.stdin); print(next(a['id'] for a in data if a['name']=='OpenClaw'))" 2>/dev/null || echo "")
 
-if [ -n "$ADAPTER_ID" ]; then
+  if [ -n "$ADAPTER_ID" ]; then
   TASK_RESP=$(curl -sf -X POST "$API_URL/v1/tasks" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"Verify Task\",\"objective\":\"E2E verification task\",\"agent_adapter_id\":\"$ADAPTER_ID\",\"sla_seconds\":60,\"loop_config\":{\"max_iterations\":3,\"max_duration_seconds\":300}}")
@@ -47,6 +47,23 @@ if [ -n "$ADAPTER_ID" ]; then
 
   if [ -n "$TASK_ID" ]; then
     ok "Task created id=$TASK_ID"
+
+    # Task with success_criteria
+    CRITERIA_TASK=$(curl -sf -X POST "$API_URL/v1/tasks" \
+      -H "Content-Type: application/json" \
+      -d "{\"name\":\"Criteria Task\",\"objective\":\"Task with criteria\",\"agent_adapter_id\":\"$ADAPTER_ID\",\"success_criteria\":{\"rules\":[{\"type\":\"field_equals\",\"path\":\"tests_passed\",\"value\":true}],\"match\":\"all\"}}")
+    CRITERIA_ID=$(echo "$CRITERIA_TASK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+    if [ -n "$CRITERIA_ID" ]; then
+      ok "Task with success_criteria created id=$CRITERIA_ID"
+      if echo "$CRITERIA_TASK" | grep -q "success_criteria"; then
+        ok "success_criteria in task response"
+      else
+        fail "success_criteria missing in response"
+      fi
+    else
+      fail "Task with success_criteria creation failed"
+    fi
+
     RUN_RESP=$(curl -sf -X POST "$API_URL/v1/tasks/$TASK_ID/submit")
     RUN_ID=$(echo "$RUN_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
 
@@ -63,6 +80,12 @@ if [ -n "$ADAPTER_ID" ]; then
       done
       if [ "$FINAL_STATUS" = "Success" ]; then
         ok "E2E run completed with Success"
+        TIMELINE=$(curl -sf "$API_URL/v1/runs/$RUN_ID/timeline" 2>/dev/null || echo "")
+        if echo "$TIMELINE" | grep -q '"iterations"'; then
+          ok "Run timeline endpoint"
+        else
+          fail "Run timeline endpoint missing iterations"
+        fi
       else
         fail "E2E run did not reach Success (status=$FINAL_STATUS)"
       fi
@@ -116,6 +139,25 @@ if [ -n "$WF_ID" ]; then
   fi
 else
   fail "Workflow creation failed"
+fi
+
+# Phase2: skills & memory API
+SKILL_RESP=$(curl -sf -X POST "$API_URL/v1/skills" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"verify-report-skill","description":"E2E skill","instructions":"输出结构化报告"}' 2>/dev/null || echo "")
+if echo "$SKILL_RESP" | grep -q '"name"'; then
+  ok "Skill API create"
+else
+  fail "Skill API create"
+fi
+
+MEM_RESP=$(curl -sf -X POST "$API_URL/v1/memory" \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"global","key":"verify-tip","content":"E2E memory entry"}' 2>/dev/null || echo "")
+if echo "$MEM_RESP" | grep -q '"key"'; then
+  ok "Memory API create"
+else
+  fail "Memory API create"
 fi
 
 log "=== Results: $PASS passed, $FAIL failed ==="

@@ -44,6 +44,16 @@ export default function DashboardPage() {
     { label: "队列积压", value: metrics.queue_backlog, color: "text-red-600", suffix: "条待调度" },
   ];
 
+  const loopStats = metrics.loop_stats;
+  const loopCards = loopStats
+    ? [
+        { label: "无进展告警", value: loopStats.no_progress_alerts ?? 0, color: "text-amber-600" },
+        { label: "预算超限", value: loopStats.budget_exceeded_alerts ?? 0, color: "text-red-600" },
+        { label: "LLM 验证次数", value: loopStats.llm_verifications ?? 0, color: "text-indigo-600" },
+        { label: "待审批", value: loopStats.pending_approvals ?? 0, color: "text-rose-600" },
+      ]
+    : [];
+
   return (
     <AppShell title="数据看板 BI">
       <div className="space-y-6">
@@ -61,6 +71,20 @@ export default function DashboardPage() {
             </div>
           ))}
         </div>
+
+        {loopCards.length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium text-gray-500 mb-3">Loop 闭环指标</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {loopCards.map((card) => (
+                <div key={card.label} className="bg-white rounded-lg shadow p-5 border border-gray-100">
+                  <h4 className="text-gray-500 text-sm font-medium mb-2">{card.label}</h4>
+                  <span className={`text-2xl font-bold ${card.color}`}>{card.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-lg shadow p-6 border border-gray-100">

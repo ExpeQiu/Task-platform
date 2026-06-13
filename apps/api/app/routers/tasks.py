@@ -11,6 +11,7 @@ from app.schemas.dto import (
     RunLogsResponse,
     TaskCreate,
     TaskDetailResponse,
+    TaskListItemResponse,
     TaskListResponse,
     TaskResponse,
     TaskRunResponse,
@@ -38,7 +39,16 @@ async def list_tasks(
 ):
     service = TaskService(db)
     items, total = await service.list_tasks(status=status, search=search, skip=skip, limit=limit)
-    return TaskListResponse(items=items, total=total)
+    enriched: list[TaskListItemResponse] = []
+    for task in items:
+        latest_run = None
+        if task.runs:
+            latest = sorted(task.runs, key=lambda r: r.created_at, reverse=True)[0]
+            latest_run = TaskRunResponse.model_validate(latest)
+        item = TaskListItemResponse.model_validate(task)
+        item.latest_run = latest_run
+        enriched.append(item)
+    return TaskListResponse(items=enriched, total=total)
 
 
 @router.get("/{task_id}", response_model=TaskDetailResponse)

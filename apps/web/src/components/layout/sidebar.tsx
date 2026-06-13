@@ -8,6 +8,12 @@ const navItems = [
   { href: "/", label: "数据看板 BI" },
   { href: "/tasks", label: "任务中心" },
   { href: "/orchestrator", label: "流程编排" },
+  { href: "/approvals", label: "审批收件箱" },
+];
+
+const assetItems = [
+  { href: "/skills", label: "Skill 资产" },
+  { href: "/memory", label: "长期记忆" },
 ];
 
 const adminItems = [
@@ -39,7 +45,7 @@ function NavLink({ href, label, alertCount }: { href: string; label: string; ale
   );
 }
 
-export function Sidebar({ alertCount = 0 }: { alertCount?: number }) {
+export function Sidebar({ alertCount = 0, approvalCount = 0 }: { alertCount?: number; approvalCount?: number }) {
   return (
     <div className="w-64 bg-gray-900 text-white flex flex-col h-full shadow-lg flex-shrink-0">
       <div className="p-5 flex items-center justify-center border-b border-gray-800">
@@ -47,6 +53,16 @@ export function Sidebar({ alertCount = 0 }: { alertCount?: number }) {
       </div>
       <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
         {navItems.map((item) => (
+          <NavLink
+            key={item.href}
+            {...item}
+            alertCount={item.href === "/approvals" ? approvalCount : undefined}
+          />
+        ))}
+        <div className="pt-4 pb-2">
+          <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">Loop 资产</p>
+        </div>
+        {assetItems.map((item) => (
           <NavLink key={item.href} {...item} />
         ))}
         <div className="pt-4 pb-2">

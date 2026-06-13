@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.entities import AgentAdapter, Assignment, Task, TaskRun, TaskStatus
+from app.models.entities import AgentAdapter, Alert, Assignment, Task, TaskRun, TaskStatus, VerificationResult, WorkflowApproval, WorkflowRunStatus
 from app.schemas.dto import AdapterStat, DashboardMetrics
 from app.services.adapter_metrics import get_adapter_stats
 
@@ -52,6 +52,42 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
     adapter_stats_raw = await get_adapter_stats(db)
     adapter_stats = [AdapterStat(**item) for item in adapter_stats_raw]
 
+    from app.models.entities import ApprovalStatus
+
+    no_progress = (
+        await db.execute(
+            select(func.count(Alert.id)).where(
+                Alert.alert_type == "NoProgressDetected",
+                Alert.status.in_(["open", "ack"]),
+            )
+        )
+    ).scalar() or 0
+    budget_exceeded = (
+        await db.execute(
+            select(func.count(Alert.id)).where(
+                Alert.alert_type == "BudgetExceeded",
+                Alert.status.in_(["open", "ack"]),
+            )
+        )
+    ).scalar() or 0
+    llm_verifications = (
+        await db.execute(
+            select(func.count(VerificationResult.id)).where(VerificationResult.verified_by.like("%llm%"))
+        )
+    ).scalar() or 0
+    pending_approvals = (
+        await db.execute(
+            select(func.count(WorkflowApproval.id)).where(WorkflowApproval.status == ApprovalStatus.PENDING.value)
+        )
+    ).scalar() or 0
+
+    loop_stats = {
+        "no_progress_alerts": no_progress,
+        "budget_exceeded_alerts": budget_exceeded,
+        "llm_verifications": llm_verifications,
+        "pending_approvals": pending_approvals,
+    }
+
     return DashboardMetrics(
         total_tasks=total_tasks,
         active_runs=active_runs,
@@ -60,6 +96,7 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
         trend=trend,
         agent_distribution=agent_distribution,
         adapter_stats=adapter_stats,
+        loop_stats=loop_stats,
     )
 
 

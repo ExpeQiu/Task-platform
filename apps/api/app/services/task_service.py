@@ -16,13 +16,26 @@ from app.models.entities import (
     Task,
     TaskRun,
     TaskStatus,
+    VerificationResult,
 )
 from app.schemas.dto import TaskCreate, TaskUpdate
 from app.services.audit import write_audit
+from app.services.llm_verifier import verify_with_llm
 from app.services.loop_guard import LoopGuard
+from app.services.memory_service import MemoryService
+from app.services.skill_service import SkillService
 from app.services.state_machine import StateMachineService
+from app.services.verifier import VERDICT_FAILED, VERDICT_NEEDS_CONTINUE, VERDICT_PASSED, VerifierService
 
 logger = logging.getLogger(__name__)
+
+
+def _dump_criteria(value) -> dict:
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    return value if isinstance(value, dict) else {}
 
 
 class TaskService:
@@ -30,11 +43,20 @@ class TaskService:
         self.db = db
         self.sm = StateMachineService(db)
         self.loop_guard = LoopGuard(db)
+        self.verifier = VerifierService()
+        self.memory = MemoryService(db)
+        self.skills = SkillService(db)
 
     async def create_task(self, payload: TaskCreate, actor: str = "admin") -> Task:
+        objective = payload.objective
+        skill_id = payload.skill_id
+        if skill_id:
+            skill = await self.skills.get(skill_id)
+            objective = self.skills.apply_to_objective(skill, objective)
+
         task = Task(
             name=payload.name,
-            objective=payload.objective,
+            objective=objective,
             priority=payload.priority,
             sla_seconds=payload.sla_seconds,
             tags=payload.tags,
@@ -43,6 +65,10 @@ class TaskService:
             schedule_at=payload.schedule_at,
             loop_config=payload.loop_config.model_dump(),
             retry_config=payload.retry_config.model_dump(),
+            success_criteria=_dump_criteria(payload.success_criteria),
+            failure_criteria=_dump_criteria(payload.failure_criteria),
+            verification_mode=payload.verification_mode,
+            skill_id=skill_id,
             status=TaskStatus.DRAFT.value,
         )
         self.db.add(task)
@@ -74,7 +100,7 @@ class TaskService:
         skip: int = 0,
         limit: int = 50,
     ) -> tuple[list[Task], int]:
-        query = select(Task)
+        query = select(Task).options(selectinload(Task.runs))
         count_query = select(func.count(Task.id))
         if status:
             query = query.where(Task.status == status)
@@ -95,6 +121,10 @@ class TaskService:
             data["loop_config"] = data["loop_config"].model_dump() if hasattr(data["loop_config"], "model_dump") else data["loop_config"]
         if "retry_config" in data and data["retry_config"]:
             data["retry_config"] = data["retry_config"].model_dump() if hasattr(data["retry_config"], "model_dump") else data["retry_config"]
+        if "success_criteria" in data and data["success_criteria"] is not None:
+            data["success_criteria"] = _dump_criteria(data["success_criteria"])
+        if "failure_criteria" in data and data["failure_criteria"] is not None:
+            data["failure_criteria"] = _dump_criteria(data["failure_criteria"])
         for key, value in data.items():
             setattr(task, key, value)
         await write_audit(self.db, action="UPDATE_TASK", target=str(task.id), detail="更新任务", actor=actor)
@@ -144,7 +174,13 @@ class TaskService:
 
     async def get_run(self, run_id: uuid.UUID) -> TaskRun:
         result = await self.db.execute(
-            select(TaskRun).options(selectinload(TaskRun.task), selectinload(TaskRun.feedbacks)).where(TaskRun.id == run_id)
+            select(TaskRun)
+            .options(
+                selectinload(TaskRun.task),
+                selectinload(TaskRun.feedbacks),
+                selectinload(TaskRun.verification_results),
+            )
+            .where(TaskRun.id == run_id)
         )
         run = result.scalar_one_or_none()
         if not run:
@@ -202,6 +238,7 @@ class TaskService:
             error_code=payload.error_code,
         )
         self.db.add(feedback)
+        await self.db.flush()
 
         if run.status == TaskStatus.RUNNING.value:
             await self.sm.transition(run, TaskStatus.WAITING_FEEDBACK.value, actor=actor, detail="Awaiting feedback processing")
@@ -220,14 +257,15 @@ class TaskService:
             status = get_adapter(adapter).normalize_status(payload.status)
         if status == "success":
             await self.sm.transition(run, TaskStatus.REVIEWING.value, actor=actor, detail="Feedback received")
-            await self.sm.transition(run, TaskStatus.SUCCESS.value, actor=actor, detail="Task completed")
+            await self._process_verification(run, feedback, status, actor=actor)
         elif status == "failed":
             await self.sm.transition(run, TaskStatus.REVIEWING.value, actor=actor, detail="Feedback failed")
             await self._handle_failure(run, payload.error_code or "AGENT_FAILED")
+            if run.workflow_run_id:
+                await self._fail_workflow(run, payload.error_code or "AGENT_FAILED")
         elif status == "requires_action":
-            run.progress = min(run.progress + 10, 90)
-            if run.status != TaskStatus.WAITING_FEEDBACK.value:
-                await self.sm.transition(run, TaskStatus.WAITING_FEEDBACK.value, actor=actor, detail="Requires action")
+            await self.sm.transition(run, TaskStatus.REVIEWING.value, actor=actor, detail="Requires action")
+            await self._process_verification(run, feedback, status, actor=actor)
         else:
             run.progress = min(run.progress + 5, 95)
 
@@ -239,12 +277,94 @@ class TaskService:
             actor=actor,
         )
 
-        if run.workflow_run_id and status == "success":
-            await self._advance_workflow(run, payload.result_payload)
-        elif run.workflow_run_id and status == "failed":
-            await self._fail_workflow(run, payload.error_code or "AGENT_FAILED")
-
         return run
+
+    async def _resolve_verification_outcome(self, task, feedback, run, agent_status):
+        mode = (task.verification_mode or "rule_based").lower()
+        if mode == "llm_agent":
+            return await verify_with_llm(task, feedback, run, agent_status=agent_status)
+        if mode == "hybrid":
+            rule_outcome = self.verifier.verify(task, feedback, run, agent_status=agent_status)
+            if rule_outcome.verdict != VERDICT_PASSED:
+                return rule_outcome
+            llm_outcome = await verify_with_llm(task, feedback, run, agent_status=agent_status)
+            llm_outcome.signals = {**rule_outcome.signals, **llm_outcome.signals, "hybrid": True}
+            return llm_outcome
+        return self.verifier.verify(task, feedback, run, agent_status=agent_status)
+
+    async def _process_verification(
+        self,
+        run: TaskRun,
+        feedback: Feedback,
+        agent_status: str,
+        *,
+        actor: str = "system",
+    ) -> None:
+        task = run.task
+        loop_config = task.loop_config or {}
+        self.loop_guard.accumulate_budget_usage(run, feedback.result_payload or {})
+        if not await self.loop_guard.enforce_budget_or_fail(run, loop_config):
+            await self.sm.transition(run, TaskStatus.TERMINATED.value, actor="loop_guard", detail=run.error_message or "预算超限")
+            return
+
+        outcome = await self._resolve_verification_outcome(task, feedback, run, agent_status)
+        self.loop_guard.record_progress_snapshot(run, feedback.result_payload or {})
+
+        vr = VerificationResult(
+            run_id=run.id,
+            iteration=run.iteration_count,
+            verdict=outcome.verdict,
+            reason=outcome.reason,
+            signals=outcome.signals,
+            verified_by=outcome.verified_by,
+        )
+        self.db.add(vr)
+        await write_audit(
+            self.db,
+            action="VERIFY_RESULT",
+            target=str(run.id),
+            detail=f"verdict={outcome.verdict} reason={outcome.reason}",
+            actor=actor,
+            metadata={"verdict": outcome.verdict, "signals": outcome.signals},
+        )
+        logger.info(
+            "verification run=%s iteration=%s verdict=%s reason=%s",
+            run.id,
+            run.iteration_count,
+            outcome.verdict,
+            outcome.reason,
+        )
+
+        if outcome.verdict == VERDICT_PASSED:
+            await self.sm.transition(run, TaskStatus.SUCCESS.value, actor=actor, detail="Platform verified complete")
+            summary = (feedback.result_payload or {}).get("summary", outcome.reason)
+            await self.memory.record_run_outcome(task, run.id, success=True, summary=str(summary))
+            if run.workflow_run_id:
+                await self._advance_workflow(run, feedback.result_payload or {})
+        elif outcome.verdict == VERDICT_NEEDS_CONTINUE:
+            if not await self.loop_guard.enforce_no_progress_or_fail(run, loop_config):
+                await self.sm.transition(
+                    run,
+                    TaskStatus.TERMINATED.value,
+                    actor="loop_guard",
+                    detail=run.error_message or "无进展终止",
+                )
+                return
+            if not await self.loop_guard.enforce_or_fail(run, loop_config):
+                await self.sm.transition(run, TaskStatus.FAILED.value, actor="loop_guard", detail="Loop limit exceeded")
+                return
+            await self._schedule_next_iteration(run, actor=actor)
+        elif outcome.verdict == VERDICT_FAILED:
+            await self._handle_failure(run, "VERIFICATION_FAILED")
+            if run.workflow_run_id:
+                await self._fail_workflow(run, "VERIFICATION_FAILED")
+
+    async def _schedule_next_iteration(self, run: TaskRun, *, actor: str = "system") -> None:
+        await self.sm.transition(run, TaskStatus.ITERATING.value, actor=actor, detail="Continue to next iteration")
+        from app.tasks.dispatch import dispatch_task_run
+
+        dispatch_task_run.delay(str(run.id))
+        logger.info("next iteration scheduled run=%s iteration_count=%s", run.id, run.iteration_count)
 
     async def _advance_workflow(self, run: TaskRun, result_payload: dict) -> None:
         from sqlalchemy.orm import selectinload
@@ -319,6 +439,11 @@ class TaskService:
             return None  # type: ignore
 
         run.iteration_count += 1
+
+        memory_ctx = await self.memory.build_context_snippet(task)
+        if memory_ctx:
+            run.context = {**(run.context or {}), **memory_ctx}
+
         adapter_result = await self.db.execute(select(AgentAdapter).where(AgentAdapter.id == task.agent_adapter_id))
         adapter = adapter_result.scalar_one_or_none()
         if not adapter:
@@ -374,3 +499,66 @@ class TaskService:
             )
         logs.sort(key=lambda x: x["timestamp"])
         return logs
+
+    async def get_run_timeline(self, run_id: uuid.UUID) -> dict:
+        run = await self.get_run(run_id)
+        task = run.task
+        loop_config = task.loop_config or {}
+        max_iterations = loop_config.get("max_iterations", 10)
+
+        verifications = sorted(run.verification_results, key=lambda v: v.created_at)
+        feedbacks = sorted(run.feedbacks, key=lambda f: f.received_at)
+
+        iterations: list[dict] = []
+        for idx, fb in enumerate(feedbacks):
+            vr = verifications[idx] if idx < len(verifications) else None
+            iterations.append(
+                {
+                    "iteration": idx + 1,
+                    "agent_status": fb.status,
+                    "result_payload": fb.result_payload or {},
+                    "verification": vr,
+                    "received_at": fb.received_at,
+                }
+            )
+
+        termination_reason = None
+        if run.status in {TaskStatus.TERMINATED.value, TaskStatus.FAILED.value}:
+            termination_reason = run.error_message
+        elif run.status == TaskStatus.SUCCESS.value and verifications:
+            last_v = verifications[-1]
+            if last_v.verdict == VERDICT_PASSED:
+                termination_reason = f"平台验证通过: {last_v.reason}"
+
+        from app.models.entities import AuditEvent
+
+        audit_result = await self.db.execute(
+            select(AuditEvent).where(AuditEvent.target == str(run_id)).order_by(AuditEvent.created_at)
+        )
+        events = [
+            {
+                "timestamp": event.created_at,
+                "source": "audit",
+                "message": f"{event.action}: {event.detail}",
+                "metadata": event.metadata_json,
+            }
+            for event in audit_result.scalars().all()
+        ]
+
+        return {
+            "run_id": run.id,
+            "task_id": run.task_id,
+            "objective": task.objective,
+            "success_criteria": task.success_criteria or {},
+            "verification_mode": task.verification_mode or "rule_based",
+            "status": run.status,
+            "iteration_count": run.iteration_count,
+            "max_iterations": max_iterations,
+            "budget_limit": loop_config.get("budget_limit"),
+            "budget_usage": (run.context or {}).get("budget_usage") or {},
+            "long_term_memory": (run.context or {}).get("long_term_memory") or [],
+            "error_message": run.error_message,
+            "termination_reason": termination_reason,
+            "iterations": iterations,
+            "events": events,
+        }

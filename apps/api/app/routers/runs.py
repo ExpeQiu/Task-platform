@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.base import PullAdapter
 from app.database import get_db
 from app.models.entities import AgentAdapter
-from app.schemas.dto import AgentFeedbackWebhook, PullTaskResponse, RunLogEntry, RunLogsResponse, TaskRunResponse
+from app.schemas.dto import AgentFeedbackWebhook, PullTaskResponse, RunLogEntry, RunLogsResponse, RunTimelineResponse, TaskRunResponse
 from app.services.task_service import TaskService
 from app.services.webhook_auth import verify_webhook_request
 
@@ -42,6 +42,43 @@ async def get_run_logs(run_id: UUID, db: AsyncSession = Depends(get_db)):
     return RunLogsResponse(
         run_id=run_id,
         logs=[RunLogEntry(**entry) for entry in logs],
+    )
+
+
+@router.get("/v1/runs/{run_id}/timeline", response_model=RunTimelineResponse)
+async def get_run_timeline(run_id: UUID, db: AsyncSession = Depends(get_db)):
+    service = TaskService(db)
+    data = await service.get_run_timeline(run_id)
+    from app.schemas.dto import RunIterationEntry, VerificationResultResponse
+
+    iterations = []
+    for item in data["iterations"]:
+        vr = item.get("verification")
+        iterations.append(
+            RunIterationEntry(
+                iteration=item["iteration"],
+                agent_status=item.get("agent_status"),
+                result_payload=item.get("result_payload") or {},
+                verification=VerificationResultResponse.model_validate(vr) if vr else None,
+                received_at=item.get("received_at"),
+            )
+        )
+    return RunTimelineResponse(
+        run_id=data["run_id"],
+        task_id=data["task_id"],
+        objective=data["objective"],
+        success_criteria=data["success_criteria"],
+        verification_mode=data.get("verification_mode", "rule_based"),
+        status=data["status"],
+        iteration_count=data["iteration_count"],
+        max_iterations=data["max_iterations"],
+        budget_limit=data.get("budget_limit"),
+        budget_usage=data.get("budget_usage") or {},
+        long_term_memory=data.get("long_term_memory") or [],
+        error_message=data["error_message"],
+        termination_reason=data["termination_reason"],
+        iterations=iterations,
+        events=[RunLogEntry(**e) for e in data["events"]],
     )
 
 

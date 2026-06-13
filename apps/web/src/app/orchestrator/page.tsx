@@ -20,6 +20,10 @@ const STATUS_BADGE: Record<string, string> = {
   Draft: "bg-gray-100 text-gray-700",
   Published: "bg-green-100 text-green-700",
   Archived: "bg-yellow-100 text-yellow-700",
+  PendingApproval: "bg-rose-100 text-rose-800",
+  Running: "bg-blue-100 text-blue-800",
+  Success: "bg-green-100 text-green-800",
+  Failed: "bg-red-100 text-red-800",
 };
 
 export default function OrchestratorPage() {
@@ -29,6 +33,8 @@ export default function OrchestratorPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adapters, setAdapters] = useState<Adapter[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<Awaited<ReturnType<typeof api.listRunApprovals>>>([]);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
@@ -74,6 +80,21 @@ export default function OrchestratorPage() {
       }),
     }));
   }, [adapters]);
+
+  const openRunDetail = async (run: WorkflowRun) => {
+    setExpandedRunId(run.id === expandedRunId ? null : run.id);
+    if (run.status === "PendingApproval") {
+      const approvals = await api.listRunApprovals(run.id);
+      setPendingApprovals(approvals);
+    }
+  };
+
+  const decideApproval = async (runId: string, approvalId: string, approved: boolean) => {
+    await api.decideApproval(runId, approvalId, { approved });
+    flash(approved ? "审批已通过" : "审批已拒绝");
+    if (current) api.listWorkflowRuns(current.id).then(setRuns);
+    setPendingApprovals([]);
+  };
 
   const selectWorkflow = (wf: Workflow) => {
     setCurrent(wf);
@@ -165,7 +186,7 @@ export default function OrchestratorPage() {
       id,
       type,
       label: palette?.defaultLabel || type,
-      config: type === "start" ? { trigger: "webhook" } : type === "end" ? { action: "notify" } : {},
+      config: type === "start" ? { trigger: "webhook" } : type === "end" ? { action: "notify" } : type === "approval" ? { title: "人工审批", message: "" } : {},
       position: { x: 80 + dag.nodes.length * 30, y: 80 + dag.nodes.length * 20 },
     };
     setDag({ ...dag, nodes: [...dag.nodes, node] });
@@ -398,9 +419,15 @@ export default function OrchestratorPage() {
                 </thead>
                 <tbody>
                   {runs.map((r) => (
-                    <tr key={r.id} className="border-b border-gray-50">
+                    <tr
+                      key={r.id}
+                      className={`border-b border-gray-50 cursor-pointer hover:bg-gray-50 ${r.status === "PendingApproval" ? "bg-rose-50" : ""}`}
+                      onClick={() => openRunDetail(r)}
+                    >
                       <td className="py-2 pr-4 font-mono text-xs">{r.id.slice(0, 8)}…</td>
-                      <td className="py-2 pr-4">{r.status}</td>
+                      <td className="py-2 pr-4">
+                        <span className={`px-1.5 py-0.5 text-xs rounded ${STATUS_BADGE[r.status] || ""}`}>{r.status}</span>
+                      </td>
                       <td className="py-2 pr-4">{r.current_node_id || "-"}</td>
                       <td className="py-2 pr-4">{r.started_at ? new Date(r.started_at).toLocaleString() : "-"}</td>
                       <td className="py-2 text-red-600 text-xs">{r.error_message || "-"}</td>
@@ -409,6 +436,33 @@ export default function OrchestratorPage() {
                 </tbody>
               </table>
             </div>
+            {expandedRunId && pendingApprovals.length > 0 && (
+              <div className="mt-4 border-t pt-4 space-y-3">
+                <h5 className="text-sm font-medium text-rose-800">待审批</h5>
+                {pendingApprovals.filter((a) => a.status === "pending").map((a) => (
+                  <div key={a.id} className="bg-rose-50 border border-rose-100 rounded p-3 text-sm">
+                    <p className="font-medium">{a.title}</p>
+                    <p className="text-gray-600 mt-1">{a.message}</p>
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); decideApproval(expandedRunId, a.id, true); }}
+                        className="bg-green-600 text-white px-3 py-1 rounded text-xs"
+                      >
+                        通过
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); decideApproval(expandedRunId, a.id, false); }}
+                        className="bg-red-600 text-white px-3 py-1 rounded text-xs"
+                      >
+                        拒绝
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -15,12 +15,18 @@ router = APIRouter(prefix="/v1/alerts", tags=["alerts"])
 
 
 @router.get("", response_model=list[AlertResponse])
-async def list_alerts(status: str | None = None, db: AsyncSession = Depends(get_db)):
+async def list_alerts(
+    status: str | None = None,
+    alert_type: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     query = select(Alert)
     if status:
         query = query.where(Alert.status == status)
     else:
         query = query.where(Alert.status.in_([AlertStatus.OPEN.value, AlertStatus.ACK.value]))
+    if alert_type:
+        query = query.where(Alert.alert_type == alert_type)
     result = await db.execute(query.order_by(Alert.created_at.desc()))
     return result.scalars().all()
 

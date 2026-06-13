@@ -17,6 +17,18 @@ class RetryConfig(BaseModel):
     backoff_base_seconds: int = 30
 
 
+class CriteriaRule(BaseModel):
+    type: str
+    path: str | None = None
+    value: Any | None = None
+    values: list[str] | None = None
+
+
+class CriteriaConfig(BaseModel):
+    rules: list[CriteriaRule] = Field(default_factory=list)
+    match: str = "all"
+
+
 class TaskCreate(BaseModel):
     name: str
     objective: str
@@ -28,6 +40,10 @@ class TaskCreate(BaseModel):
     schedule_at: datetime | None = None
     loop_config: LoopConfig = Field(default_factory=LoopConfig)
     retry_config: RetryConfig = Field(default_factory=RetryConfig)
+    success_criteria: CriteriaConfig | dict = Field(default_factory=dict)
+    failure_criteria: CriteriaConfig | dict = Field(default_factory=dict)
+    verification_mode: str = "rule_based"
+    skill_id: UUID | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -41,6 +57,10 @@ class TaskUpdate(BaseModel):
     schedule_at: datetime | None = None
     loop_config: LoopConfig | None = None
     retry_config: RetryConfig | None = None
+    success_criteria: CriteriaConfig | dict | None = None
+    failure_criteria: CriteriaConfig | dict | None = None
+    verification_mode: str | None = None
+    skill_id: UUID | None = None
 
 
 class TaskResponse(BaseModel):
@@ -57,6 +77,10 @@ class TaskResponse(BaseModel):
     schedule_at: datetime | None
     loop_config: dict
     retry_config: dict
+    success_criteria: dict
+    failure_criteria: dict
+    verification_mode: str
+    skill_id: UUID | None
     status: str
     created_at: datetime
     updated_at: datetime
@@ -84,8 +108,12 @@ class TaskDetailResponse(TaskResponse):
     latest_run: TaskRunResponse | None = None
 
 
+class TaskListItemResponse(TaskResponse):
+    latest_run: TaskRunResponse | None = None
+
+
 class TaskListResponse(BaseModel):
-    items: list[TaskResponse]
+    items: list[TaskListItemResponse]
     total: int
 
 
@@ -177,6 +205,45 @@ class RunLogsResponse(BaseModel):
     logs: list[RunLogEntry]
 
 
+class VerificationResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    iteration: int
+    verdict: str
+    reason: str
+    signals: dict
+    verified_by: str
+    created_at: datetime
+
+
+class RunIterationEntry(BaseModel):
+    iteration: int
+    agent_status: str | None = None
+    result_payload: dict = Field(default_factory=dict)
+    verification: VerificationResultResponse | None = None
+    received_at: datetime | None = None
+
+
+class RunTimelineResponse(BaseModel):
+    run_id: UUID
+    task_id: UUID
+    objective: str
+    success_criteria: dict
+    verification_mode: str = "rule_based"
+    status: str
+    iteration_count: int
+    max_iterations: int
+    budget_limit: int | None = None
+    budget_usage: dict = Field(default_factory=dict)
+    long_term_memory: list = Field(default_factory=list)
+    error_message: str | None
+    termination_reason: str | None = None
+    iterations: list[RunIterationEntry] = Field(default_factory=list)
+    events: list[RunLogEntry] = Field(default_factory=list)
+
+
 class AdapterStat(BaseModel):
     adapter_id: str
     name: str
@@ -198,6 +265,7 @@ class DashboardMetrics(BaseModel):
     trend: list[dict]
     agent_distribution: list[dict]
     adapter_stats: list[AdapterStat] = Field(default_factory=list)
+    loop_stats: dict = Field(default_factory=dict)
 
 
 class PullTaskResponse(BaseModel):
@@ -212,7 +280,7 @@ class PullTaskResponse(BaseModel):
 
 # --- Workflow / Orchestrator ---
 
-VALID_NODE_TYPES = {"start", "agent", "end", "condition", "parallel", "loop"}
+VALID_NODE_TYPES = {"start", "agent", "end", "condition", "parallel", "loop", "approval"}
 
 
 class DagNodePosition(BaseModel):
@@ -228,6 +296,8 @@ class DagNodeConfig(BaseModel):
     expression: str | None = None
     max_iterations: int | None = None
     action: str | None = None
+    title: str | None = None
+    message: str | None = None
 
 
 class DagNode(BaseModel):
@@ -378,3 +448,110 @@ class McpHealthResult(BaseModel):
     tool_count: int | None = None
     resource_count: int | None = None
     error: str | None = None
+
+
+# --- Skill / Playbook ---
+
+
+class SkillCreate(BaseModel):
+    name: str
+    description: str = ""
+    instructions: str = ""
+    applicable_task_types: list[str] = Field(default_factory=list)
+    input_contract: dict = Field(default_factory=dict)
+    output_contract: dict = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class SkillUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    instructions: str | None = None
+    applicable_task_types: list[str] | None = None
+    input_contract: dict | None = None
+    output_contract: dict | None = None
+    tags: list[str] | None = None
+    is_active: bool | None = None
+
+
+class SkillResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    description: str
+    instructions: str
+    applicable_task_types: list
+    input_contract: dict
+    output_contract: dict
+    tags: list
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class SkillListResponse(BaseModel):
+    items: list[SkillResponse]
+    total: int
+
+
+# --- Memory ---
+
+
+class MemoryEntryCreate(BaseModel):
+    scope: str = "global"
+    scope_ref: str | None = None
+    key: str
+    content: str
+    metadata: dict = Field(default_factory=dict)
+
+
+class MemoryEntryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    scope: str
+    scope_ref: str | None
+    key: str
+    content: str
+    metadata_json: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Workflow Approval ---
+
+
+class WorkflowApprovalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    workflow_run_id: UUID
+    node_id: str
+    title: str
+    message: str
+    status: str
+    decided_by: str | None
+    decision_note: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class WorkflowApprovalDecision(BaseModel):
+    approved: bool
+    note: str = ""
+    actor: str = "admin"
+
+
+class PendingApprovalItem(BaseModel):
+    id: UUID
+    workflow_run_id: UUID
+    workflow_id: UUID
+    workflow_name: str
+    run_status: str
+    node_id: str
+    title: str
+    message: str
+    status: str
+    created_at: datetime

@@ -33,9 +33,15 @@ export const api = {
     request<TaskRun>(`/v1/tasks/${id}/submit`, { method: "POST" }),
   getRun: (id: string) => request<TaskRun>(`/v1/runs/${id}`),
   getRunLogs: (id: string) => request<RunLogs>(`/v1/runs/${id}/logs`),
+  getRunTimeline: (id: string) => request<RunTimeline>(`/v1/runs/${id}/timeline`),
   retryRun: (id: string) => request<TaskRun>(`/v1/runs/${id}/retry`, { method: "POST" }),
   terminateRun: (id: string) => request<TaskRun>(`/v1/runs/${id}/terminate`, { method: "POST" }),
-  listAlerts: () => request<Alert[]>("/v1/alerts"),
+  listAlerts: (params?: { alert_type?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.alert_type) q.set("alert_type", params.alert_type);
+    const qs = q.toString();
+    return request<Alert[]>(`/v1/alerts${qs ? `?${qs}` : ""}`);
+  },
   updateAlert: (id: string, status: string) =>
     request<Alert>(`/v1/alerts/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
   listAudit: () => request<AuditEvent[]>("/v1/audit"),
@@ -59,6 +65,32 @@ export const api = {
     request<McpServer>(`/v1/mcp/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteMcpServer: (id: string) => request<void>(`/v1/mcp/${id}`, { method: "DELETE" }),
   probeMcpServer: (id: string) => request<McpHealth>(`/v1/mcp/${id}/probe`, { method: "POST" }),
+
+  // Skills
+  listSkills: () => request<SkillListResponse>("/v1/skills"),
+  createSkill: (body: SkillCreate) =>
+    request<Skill>("/v1/skills", { method: "POST", body: JSON.stringify(body) }),
+  updateSkill: (id: string, body: Partial<SkillCreate>) =>
+    request<Skill>(`/v1/skills/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  // Memory
+  listMemory: (params?: { scope?: string; search?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.scope) q.set("scope", params.scope);
+    if (params?.search) q.set("search", params.search);
+    return request<MemoryEntry[]>(`/v1/memory?${q}`);
+  },
+  createMemory: (body: { scope?: string; scope_ref?: string; key: string; content: string }) =>
+    request<MemoryEntry>("/v1/memory", { method: "POST", body: JSON.stringify(body) }),
+
+  // Approvals
+  listPendingApprovals: () => request<PendingApproval[]>("/v1/workflows/approvals/pending"),
+  listRunApprovals: (runId: string) => request<WorkflowApproval[]>(`/v1/workflows/runs/${runId}/approvals`),
+  decideApproval: (runId: string, approvalId: string, body: { approved: boolean; note?: string; actor?: string }) =>
+    request<WorkflowRun>(`/v1/workflows/runs/${runId}/approvals/${approvalId}/decide`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   // Workflows / Orchestrator
   listWorkflows: (params?: { status?: string }) => {
@@ -97,6 +129,12 @@ export interface DashboardMetrics {
   trend: { hour: string; success: number; failed: number }[];
   agent_distribution: { name: string; count: number }[];
   adapter_stats: AdapterStat[];
+  loop_stats?: {
+    no_progress_alerts?: number;
+    budget_exceeded_alerts?: number;
+    llm_verifications?: number;
+    pending_approvals?: number;
+  };
 }
 
 export interface AdapterStat {
@@ -121,6 +159,11 @@ export interface Task {
   tags: string[];
   agent_adapter_id: string | null;
   status: string;
+  success_criteria?: CriteriaConfig;
+  failure_criteria?: CriteriaConfig;
+  verification_mode?: string;
+  skill_id?: string | null;
+  loop_config?: LoopConfig;
   created_at: string;
 }
 
@@ -138,8 +181,12 @@ export interface TaskDetail extends Task {
 }
 
 export interface TaskListResponse {
-  items: Task[];
+  items: TaskListItem[];
   total: number;
+}
+
+export interface TaskListItem extends Task {
+  latest_run?: TaskRun | null;
 }
 
 export interface LoopConfig {
@@ -154,6 +201,72 @@ export interface RetryConfig {
   backoff_base_seconds?: number;
 }
 
+export interface CriteriaRule {
+  type: string;
+  path?: string;
+  value?: unknown;
+  values?: string[];
+}
+
+export interface CriteriaConfig {
+  rules?: CriteriaRule[];
+  match?: "all" | "any";
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  is_active: boolean;
+}
+
+export interface SkillCreate {
+  name: string;
+  description?: string;
+  instructions?: string;
+}
+
+export interface SkillListResponse {
+  items: Skill[];
+  total: number;
+}
+
+export interface MemoryEntry {
+  id: string;
+  scope: string;
+  scope_ref?: string | null;
+  key: string;
+  content: string;
+  created_at: string;
+}
+
+export interface PendingApproval {
+  id: string;
+  workflow_run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  run_status: string;
+  node_id: string;
+  title: string;
+  message: string;
+  status: string;
+  created_at: string;
+}
+
+export interface WorkflowApproval {
+  id: string;
+  workflow_run_id: string;
+  node_id: string;
+  title: string;
+  message: string;
+  status: string;
+  decided_by?: string | null;
+  decision_note?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+}
+
 export interface TaskCreate {
   name: string;
   objective: string;
@@ -165,6 +278,10 @@ export interface TaskCreate {
   schedule_at?: string | null;
   loop_config?: LoopConfig;
   retry_config?: RetryConfig;
+  success_criteria?: CriteriaConfig;
+  failure_criteria?: CriteriaConfig;
+  verification_mode?: string;
+  skill_id?: string | null;
 }
 
 export interface RunLogs {
@@ -172,11 +289,49 @@ export interface RunLogs {
   logs: { timestamp: string; source: string; message: string; metadata: Record<string, unknown> }[];
 }
 
+export interface VerificationResult {
+  id: string;
+  run_id: string;
+  iteration: number;
+  verdict: string;
+  reason: string;
+  signals: Record<string, unknown>;
+  verified_by: string;
+  created_at: string;
+}
+
+export interface RunIteration {
+  iteration: number;
+  agent_status: string | null;
+  result_payload: Record<string, unknown>;
+  verification: VerificationResult | null;
+  received_at: string | null;
+}
+
+export interface RunTimeline {
+  run_id: string;
+  task_id: string;
+  objective: string;
+  success_criteria: CriteriaConfig;
+  verification_mode: string;
+  status: string;
+  iteration_count: number;
+  max_iterations: number;
+  budget_limit?: number | null;
+  budget_usage?: { tokens?: number; cost?: number };
+  long_term_memory?: { key: string; content: string; scope: string; metadata?: Record<string, unknown> }[];
+  error_message: string | null;
+  termination_reason: string | null;
+  iterations: RunIteration[];
+  events: { timestamp: string; source: string; message: string; metadata: Record<string, unknown> }[];
+}
+
 export interface Alert {
   id: string;
   severity: string;
   alert_type: string;
   content: string;
+  run_id?: string | null;
   status: string;
   created_at: string;
 }
@@ -274,7 +429,7 @@ export interface McpHealth {
 
 // --- Workflow / Orchestrator ---
 
-export type NodeType = "start" | "agent" | "end" | "condition" | "parallel" | "loop";
+export type NodeType = "start" | "agent" | "end" | "condition" | "parallel" | "loop" | "approval";
 
 export interface DagNode {
   id: string;
@@ -282,11 +437,13 @@ export interface DagNode {
   label: string;
   config: {
     trigger?: string;
+    action?: string;
     adapter_id?: string;
     objective?: string;
     expression?: string;
     max_iterations?: number;
-    action?: string;
+    title?: string;
+    message?: string;
   };
   position: { x: number; y: number };
 }

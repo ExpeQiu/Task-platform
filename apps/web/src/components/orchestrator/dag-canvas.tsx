@@ -13,6 +13,7 @@ const NODE_STYLE: Record<NodeType, { border: string; badge: string; badgeColor: 
   condition: { border: "border-amber-300", badge: "Condition", badgeColor: "text-amber-600" },
   parallel: { border: "border-purple-300", badge: "Parallel", badgeColor: "text-purple-500" },
   loop: { border: "border-orange-300", badge: "Loop", badgeColor: "text-orange-500" },
+  approval: { border: "border-rose-300", badge: "Approval", badgeColor: "text-rose-600" },
 };
 
 interface Props {
@@ -139,6 +140,7 @@ export const NODE_PALETTE: { type: NodeType; label: string; defaultLabel: string
   { type: "condition", label: "条件分支", defaultLabel: "条件判断" },
   { type: "parallel", label: "并行网关", defaultLabel: "并行分发" },
   { type: "loop", label: "循环", defaultLabel: "循环控制" },
+  { type: "approval", label: "人工审批", defaultLabel: "人工审批" },
   { type: "end", label: "终点", defaultLabel: "流程结束" },
 ];
 

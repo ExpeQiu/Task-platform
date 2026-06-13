@@ -8,8 +8,11 @@ from app.database import get_db
 from app.schemas.dto import (
     AiOrchestratorRequest,
     AiOrchestratorResponse,
+    WorkflowApprovalDecision,
+    WorkflowApprovalResponse,
     WorkflowCreate,
     WorkflowListResponse,
+    PendingApprovalItem,
     WorkflowResponse,
     WorkflowRunResponse,
     WorkflowRunTrigger,
@@ -41,6 +44,40 @@ async def ai_orchestrator_chat(payload: AiOrchestratorRequest, db: AsyncSession 
 
     logger.info("ai chat completed has_dag=%s", response.dag is not None)
     return response
+
+
+@router.get("/approvals/pending", response_model=list[PendingApprovalItem])
+async def list_pending_approvals(db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.entities import ApprovalStatus, WorkflowApproval, WorkflowRun
+
+    result = await db.execute(
+        select(WorkflowApproval)
+        .join(WorkflowRun, WorkflowApproval.workflow_run_id == WorkflowRun.id)
+        .options(selectinload(WorkflowApproval.workflow_run).selectinload(WorkflowRun.workflow))
+        .where(WorkflowApproval.status == ApprovalStatus.PENDING.value)
+        .order_by(WorkflowApproval.created_at.desc())
+    )
+    items = []
+    for approval in result.scalars().all():
+        wf_run = approval.workflow_run
+        wf = wf_run.workflow if wf_run else None
+        items.append(
+            PendingApprovalItem(
+                id=approval.id,
+                workflow_run_id=approval.workflow_run_id,
+                workflow_id=wf_run.workflow_id if wf_run else approval.workflow_run_id,
+                workflow_name=wf.name if wf else "未知流程",
+                run_status=wf_run.status if wf_run else "",
+                node_id=approval.node_id,
+                title=approval.title,
+                message=approval.message,
+                status=approval.status,
+                created_at=approval.created_at,
+            )
+        )
+    return items
 
 
 @router.post("", response_model=WorkflowResponse, status_code=201)
@@ -112,3 +149,53 @@ async def list_workflow_runs(workflow_id: UUID, db: AsyncSession = Depends(get_d
 async def get_workflow_run(run_id: UUID, db: AsyncSession = Depends(get_db)):
     service = WorkflowService(db)
     return await service.get_run(run_id)
+
+
+@router.get("/runs/{run_id}/approvals", response_model=list[WorkflowApprovalResponse])
+async def list_workflow_approvals(run_id: UUID, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from app.models.entities import WorkflowApproval
+
+    result = await db.execute(
+        select(WorkflowApproval).where(WorkflowApproval.workflow_run_id == run_id).order_by(WorkflowApproval.created_at)
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/runs/{run_id}/approvals/{approval_id}/decide", response_model=WorkflowRunResponse)
+async def decide_workflow_approval(
+    run_id: UUID,
+    approval_id: UUID,
+    payload: WorkflowApprovalDecision,
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.entities import WorkflowApproval, WorkflowRun
+
+    run_result = await db.execute(
+        select(WorkflowRun).options(selectinload(WorkflowRun.workflow)).where(WorkflowRun.id == run_id)
+    )
+    wf_run = run_result.scalar_one_or_none()
+    if not wf_run:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="WorkflowRun not found")
+
+    approval_result = await db.execute(
+        select(WorkflowApproval).where(WorkflowApproval.id == approval_id, WorkflowApproval.workflow_run_id == run_id)
+    )
+    approval = approval_result.scalar_one_or_none()
+    if not approval:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Approval not found")
+
+    engine = WorkflowEngine(db)
+    run = await engine.decide_approval(
+        wf_run,
+        approval,
+        approved=payload.approved,
+        actor=payload.actor,
+        note=payload.note,
+    )
+    logger.info("approval decided run=%s approval=%s approved=%s", run_id, approval_id, payload.approved)
+    return run

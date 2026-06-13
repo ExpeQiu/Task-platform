@@ -25,6 +25,8 @@ PULL_API_KEY = os.getenv("PULL_API_KEY", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "dev-webhook-secret-change-me")
 WEBHOOK_HMAC_ENABLED = os.getenv("WEBHOOK_HMAC_ENABLED", "false").lower() == "true"
 SIGNATURE_HEADER = "X-Webhook-Signature"
+FORCE_STATUS = os.getenv("SIMULATOR_FORCE_STATUS", "").strip().lower()
+FIXED_PAYLOAD_RAW = os.getenv("SIMULATOR_FIXED_PAYLOAD", "").strip()
 
 
 def sign_callback_body(body: bytes) -> dict[str, str]:
@@ -50,19 +52,31 @@ async def send_callback(payload: TaskPayload):
         logger.warning("simulating timeout run_id=%s (no callback)", payload.run_id)
         return
 
-    roll = random.random()
-    if roll < SUCCESS_RATE:
-        status = "success"
-    elif roll < SUCCESS_RATE + 0.05:
-        status = "requires_action"
+    if FORCE_STATUS:
+        status = FORCE_STATUS
     else:
-        status = "failed"
+        roll = random.random()
+        if roll < SUCCESS_RATE:
+            status = "success"
+        elif roll < SUCCESS_RATE + 0.05:
+            status = "requires_action"
+        else:
+            status = "failed"
+
+    if FIXED_PAYLOAD_RAW:
+        try:
+            result_payload = json.loads(FIXED_PAYLOAD_RAW)
+        except json.JSONDecodeError:
+            logger.error("invalid SIMULATOR_FIXED_PAYLOAD, using default")
+            result_payload = {"summary": f"Simulated result for: {payload.objective[:50]}"}
+    else:
+        result_payload = {"summary": f"Simulated result for: {payload.objective[:50]}", "tokens_used": 120}
 
     feedback = {
         "run_id": payload.run_id,
         "feedback_id": str(uuid.uuid4()),
         "status": status,
-        "result_payload": {"summary": f"Simulated result for: {payload.objective[:50]}"},
+        "result_payload": result_payload,
         "logs": [{"level": "info", "message": f"Simulated {status} callback"}],
         "error_code": None if status != "failed" else "SIMULATED_FAILURE",
     }
@@ -72,7 +86,7 @@ async def send_callback(payload: TaskPayload):
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(payload.callback_url, content=body, headers=headers)
             resp.raise_for_status()
-        logger.info("callback sent run_id=%s status=%s hmac=%s", payload.run_id, status, WEBHOOK_HMAC_ENABLED)
+        logger.info("callback sent run_id=%s status=%s payload_keys=%s", payload.run_id, status, list(result_payload.keys()))
     except Exception as exc:
         logger.error("callback failed run_id=%s error=%s", payload.run_id, exc)
 

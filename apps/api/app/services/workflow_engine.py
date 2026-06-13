@@ -8,9 +8,11 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import (
+    ApprovalStatus,
     Task,
     TaskRun,
     TaskStatus,
+    WorkflowApproval,
     WorkflowDefinition,
     WorkflowRun,
     WorkflowRunStatus,
@@ -160,12 +162,15 @@ class WorkflowEngine:
                 if targets:
                     await self._advance_from_node(run, wf, dag, targets[0])
                 return
-            # 超出循环：走 loop 节点的第二条边（若有）
             targets = self._outgoing(dag, node_id)
             if len(targets) > 1:
                 await self._advance_from_node(run, wf, dag, targets[1])
             elif targets:
                 await self._advance_from_node(run, wf, dag, targets[0])
+            return
+
+        if ntype == "approval":
+            await self._execute_approval_node(run, wf, node)
             return
 
         if ntype == "end":
@@ -227,6 +232,72 @@ class WorkflowEngine:
         from app.tasks.dispatch import dispatch_task_run
 
         dispatch_task_run.delay(str(task_run.id))
+
+    async def _execute_approval_node(self, run: WorkflowRun, wf: WorkflowDefinition, node: dict) -> None:
+        cfg = node.get("config") or {}
+        approval = WorkflowApproval(
+            workflow_run_id=run.id,
+            node_id=node["id"],
+            title=cfg.get("title") or node.get("label", "人工审批"),
+            message=cfg.get("message") or f"流程 {wf.name} 等待人工审批",
+            status=ApprovalStatus.PENDING.value,
+        )
+        self.db.add(approval)
+        await self.db.flush()
+        run.status = WorkflowRunStatus.PENDING_APPROVAL.value
+        run.context = {**run.context, f"approval:{node['id']}": str(approval.id)}
+        await write_audit(
+            self.db,
+            action="WORKFLOW_PENDING_APPROVAL",
+            target=str(run.id),
+            detail=f"节点 {node['id']} 等待审批 approval_id={approval.id}",
+        )
+        logger.info("workflow approval pending run=%s node=%s approval=%s", run.id, node["id"], approval.id)
+
+    async def decide_approval(
+        self,
+        workflow_run: WorkflowRun,
+        approval: WorkflowApproval,
+        *,
+        approved: bool,
+        actor: str = "admin",
+        note: str = "",
+    ) -> WorkflowRun:
+        if approval.status != ApprovalStatus.PENDING.value:
+            raise HTTPException(status_code=400, detail="Approval already resolved")
+
+        from datetime import UTC, datetime
+
+        approval.status = ApprovalStatus.APPROVED.value if approved else ApprovalStatus.REJECTED.value
+        approval.decided_by = actor
+        approval.decision_note = note
+        approval.resolved_at = datetime.now(UTC)
+
+        wf = workflow_run.workflow
+        dag = self._parse_dag(wf)
+
+        await write_audit(
+            self.db,
+            action="WORKFLOW_APPROVAL_DECIDED",
+            target=str(workflow_run.id),
+            detail=f"approval={approval.id} approved={approved}",
+            actor=actor,
+        )
+
+        if not approved:
+            await self._fail(workflow_run, f"审批被拒绝: {note or approval.title}")
+            return workflow_run
+
+        workflow_run.status = WorkflowRunStatus.RUNNING.value
+        completed = list(workflow_run.completed_nodes or [])
+        if approval.node_id not in completed:
+            completed.append(approval.node_id)
+        workflow_run.completed_nodes = completed
+
+        next_ids = self._outgoing(dag, approval.node_id)
+        for next_id in next_ids:
+            await self._advance_from_node(workflow_run, wf, dag, next_id)
+        return workflow_run
 
     def _resolve_next_nodes(self, dag: WorkflowDag, node_id: str, context: dict) -> list[str]:
         node = next((n for n in dag.nodes if n.id == node_id), None)
